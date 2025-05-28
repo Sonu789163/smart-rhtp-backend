@@ -2,8 +2,8 @@ import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
 import dotenv from "dotenv";
-import documentRoutes from "../routes/document.routes";
-import chatRoutes from "../routes/chat.routes";
+import documentRoutes from "./routes/document.routes";
+import chatRoutes from "./routes/chat.routes";
 
 dotenv.config();
 
