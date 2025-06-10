@@ -4,6 +4,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import documentRoutes from "./routes/document.routes";
 import chatRoutes from "./routes/chat.routes";
+import summaryRoutes from "./routes/summary.routes";
 
 dotenv.config();
 
@@ -31,6 +32,7 @@ mongoose
 // Routes
 app.use("/api/documents", documentRoutes);
 app.use("/api/chats", chatRoutes);
+app.use("/api/summaries", summaryRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {
