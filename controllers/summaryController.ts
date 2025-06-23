@@ -17,7 +17,7 @@ export const summaryController = {
 
   async create(req: Request, res: Response) {
     try {
-      const { title, content, documentId } = req.body;
+      const { title, content, documentId, metadata } = req.body;
 
       if (!title || !content || !documentId) {
         return res.status(400).json({
@@ -32,6 +32,7 @@ export const summaryController = {
         content,
         documentId,
         updatedAt: new Date(),
+        metadata,
       });
 
       await summary.save();
