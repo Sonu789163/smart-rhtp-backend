@@ -1,19 +1,29 @@
 import { Request, Response } from "express";
 import { Document } from "../models/Document";
 
+interface AuthRequest extends Request {
+  user?: any;
+}
+
 export const documentController = {
-  async getAll(req: Request, res: Response) {
+  async getAll(req: AuthRequest, res: Response) {
     try {
-      const documents = await Document.find().sort({ uploadedAt: -1 });
+      const query: any = {};
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
+      const documents = await Document.find(query).sort({ uploadedAt: -1 });
       res.json(documents);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch documents" });
     }
   },
 
-  async getById(req: Request, res: Response) {
+  async getById(req: AuthRequest, res: Response) {
     try {
-      const document = await Document.findOne({ id: req.params.id });
+      const query: any = { id: req.params.id };
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
+      const document = await Document.findOne(query);
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
@@ -23,23 +33,34 @@ export const documentController = {
     }
   },
 
-  async create(req: Request, res: Response) {
+  async create(req: AuthRequest, res: Response) {
     try {
-      const document = new Document(req.body);
+      const user = req.user;
+      const docData = { ...req.body };
+      if (user.microsoftId) {
+        docData.microsoftId = user.microsoftId;
+      } else if (user._id) {
+        docData.userId = user._id;
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
+      const document = new Document(docData);
       await document.save();
       res.status(201).json(document);
     } catch (error) {
+      console.error("Error creating document:", error);
       res.status(500).json({ error: "Failed to create document" });
     }
   },
 
-  async update(req: Request, res: Response) {
+  async update(req: AuthRequest, res: Response) {
     try {
-      const document = await Document.findOneAndUpdate(
-        { id: req.params.id },
-        req.body,
-        { new: true }
-      );
+      const query: any = { id: req.params.id };
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
+      const document = await Document.findOneAndUpdate(query, req.body, {
+        new: true,
+      });
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
@@ -49,9 +70,12 @@ export const documentController = {
     }
   },
 
-  async delete(req: Request, res: Response) {
+  async delete(req: AuthRequest, res: Response) {
     try {
-      const document = await Document.findOneAndDelete({ id: req.params.id });
+      const query: any = { id: req.params.id };
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
+      const document = await Document.findOneAndDelete(query);
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }

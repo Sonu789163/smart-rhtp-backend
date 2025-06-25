@@ -1,12 +1,17 @@
 import { Request, Response } from "express";
 import { Chat } from "../models/Chat";
 
+interface AuthRequest extends Request {
+  user?: any;
+}
+
 export const chatController = {
-  async getByDocumentId(req: Request, res: Response) {
+  async getByDocumentId(req: AuthRequest, res: Response) {
     try {
-      const chats = await Chat.find({ documentId: req.params.documentId }).sort(
-        { updatedAt: -1 }
-      );
+      const query: any = { documentId: req.params.documentId };
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
+      const chats = await Chat.find(query).sort({ updatedAt: -1 });
       res.json(chats);
     } catch (error) {
       console.error("Error fetching chats:", error);
@@ -14,14 +19,21 @@ export const chatController = {
     }
   },
 
-  async create(req: Request, res: Response) {
+  async create(req: AuthRequest, res: Response) {
     try {
-      const chat = new Chat({
-        ...req.body,
-        messages: Array.isArray(req.body.messages)
-          ? req.body.messages
-          : [req.body.messages],
-      });
+      const user = req.user;
+      const chatData = { ...req.body };
+      if (user.microsoftId) {
+        chatData.microsoftId = user.microsoftId;
+      } else if (user._id) {
+        chatData.userId = user._id;
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
+      chatData.messages = Array.isArray(req.body.messages)
+        ? req.body.messages
+        : [req.body.messages];
+      const chat = new Chat(chatData);
       await chat.save();
       res.status(201).json(chat);
     } catch (error) {
@@ -30,18 +42,19 @@ export const chatController = {
     }
   },
 
-  async addMessage(req: Request, res: Response) {
+  async addMessage(req: AuthRequest, res: Response) {
     try {
-      const chat = await Chat.findOne({ id: req.params.chatId });
+      const query: any = { id: req.params.chatId };
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
+      const chat = await Chat.findOne(query);
       if (!chat) {
         return res.status(404).json({ error: "Chat not found" });
       }
-
       const message = {
         ...req.body,
         timestamp: new Date(req.body.timestamp || Date.now()),
       };
-
       chat.messages.push(message);
       chat.updatedAt = new Date();
       await chat.save();
@@ -52,10 +65,13 @@ export const chatController = {
     }
   },
 
-  async update(req: Request, res: Response) {
+  async update(req: AuthRequest, res: Response) {
     try {
+      const query: any = { id: req.params.id };
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
       const chat = await Chat.findOneAndUpdate(
-        { id: req.params.id },
+        query,
         {
           ...req.body,
           messages: Array.isArray(req.body.messages)
@@ -75,9 +91,12 @@ export const chatController = {
     }
   },
 
-  async delete(req: Request, res: Response) {
+  async delete(req: AuthRequest, res: Response) {
     try {
-      const chat = await Chat.findOneAndDelete({ id: req.params.id });
+      const query: any = { id: req.params.id };
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
+      const chat = await Chat.findOneAndDelete(query);
       if (!chat) {
         return res.status(404).json({ error: "Chat not found" });
       }

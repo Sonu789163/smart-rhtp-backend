@@ -1,13 +1,18 @@
 import { Request, Response } from "express";
 import { Summary } from "../models/Summary";
 
+interface AuthRequest extends Request {
+  user?: any;
+}
+
 export const summaryController = {
-  async getByDocumentId(req: Request, res: Response) {
+  async getByDocumentId(req: AuthRequest, res: Response) {
     try {
       const { documentId } = req.params;
-      const summaries = await Summary.find({ documentId }).sort({
-        updatedAt: -1,
-      });
+      const query: any = { documentId };
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
+      const summaries = await Summary.find(query).sort({ updatedAt: -1 });
       res.json(summaries);
     } catch (error) {
       console.error("Error fetching summaries:", error);
@@ -15,26 +20,32 @@ export const summaryController = {
     }
   },
 
-  async create(req: Request, res: Response) {
+  async create(req: AuthRequest, res: Response) {
     try {
       const { title, content, documentId, metadata } = req.body;
-
       if (!title || !content || !documentId) {
         return res.status(400).json({
           message: "Missing required fields",
           required: { title, content, documentId },
         });
       }
-
-      const summary = new Summary({
+      const user = req.user;
+      const summaryData: any = {
         id: Date.now().toString(),
         title,
         content,
         documentId,
         updatedAt: new Date(),
         metadata,
-      });
-
+      };
+      if (user.microsoftId) {
+        summaryData.microsoftId = user.microsoftId;
+      } else if (user._id) {
+        summaryData.userId = user._id;
+      } else {
+        return res.status(400).json({ message: "No user identifier found" });
+      }
+      const summary = new Summary(summaryData);
       await summary.save();
       res.status(201).json(summary);
     } catch (error) {
@@ -48,10 +59,13 @@ export const summaryController = {
     }
   },
 
-  async update(req: Request, res: Response) {
+  async update(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const summary = await Summary.findOneAndUpdate({ id }, req.body, {
+      const query: any = { id };
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
+      const summary = await Summary.findOneAndUpdate(query, req.body, {
         new: true,
       });
       if (!summary) {
@@ -69,10 +83,13 @@ export const summaryController = {
     }
   },
 
-  async delete(req: Request, res: Response) {
+  async delete(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const summary = await Summary.findOneAndDelete({ id });
+      const query: any = { id };
+      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
+      else if (req.user._id) query.userId = req.user._id;
+      const summary = await Summary.findOneAndDelete(query);
       if (!summary) {
         return res.status(404).json({ message: "Summary not found" });
       }
