@@ -1,9 +1,13 @@
 import express from "express";
 import { documentController } from "../controllers/documentController";
+import { authMiddleware } from "../middleware/auth";
 
 const router = express.Router();
 
-// Get all documents
+// Apply auth middleware to all routes
+router.use(authMiddleware);
+
+// Get all documents for current user
 router.get("/", documentController.getAll);
 
 // Get single document

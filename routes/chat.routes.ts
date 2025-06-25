@@ -1,7 +1,11 @@
 import express from "express";
 import { chatController } from "../controllers/chatController";
+import { authMiddleware } from "../middleware/auth";
 
 const router = express.Router();
+
+// Apply auth middleware to all routes
+router.use(authMiddleware);
 
 // Get chat history for a document
 router.get("/document/:documentId", chatController.getByDocumentId);
