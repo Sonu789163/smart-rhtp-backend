@@ -3,18 +3,25 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Document = void 0;
+exports.Summary = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
-const documentSchema = new mongoose_1.default.Schema({
+const summarySchema = new mongoose_1.default.Schema({
     id: { type: String, required: true, unique: true },
-    name: { type: String, required: true },
-    uploadedAt: { type: Date, default: Date.now },
-    namespace: { type: String },
-    status: { type: String, default: "completed" },
+    title: { type: String, required: true },
+    content: { type: String, required: true },
+    updatedAt: { type: Date, default: Date.now },
+    documentId: { type: String, required: true },
     microsoftId: { type: String },
     userId: { type: String },
+    metadata: {
+        pageCount: Number,
+        url: String,
+        pdfExpiry: String,
+        duration: Number,
+        name: String,
+    },
 });
-documentSchema.pre("validate", function (next) {
+summarySchema.pre("validate", function (next) {
     if (!this.microsoftId && !this.userId) {
         next(new Error("Either microsoftId or userId must be present."));
     }
@@ -22,4 +29,4 @@ documentSchema.pre("validate", function (next) {
         next();
     }
 });
-exports.Document = mongoose_1.default.model("Document", documentSchema);
+exports.Summary = mongoose_1.default.model("Summary", summarySchema);

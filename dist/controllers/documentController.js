@@ -5,7 +5,12 @@ const Document_1 = require("../models/Document");
 exports.documentController = {
     async getAll(req, res) {
         try {
-            const documents = await Document_1.Document.find().sort({ uploadedAt: -1 });
+            const query = {};
+            if (req.user.microsoftId)
+                query.microsoftId = req.user.microsoftId;
+            else if (req.user._id)
+                query.userId = req.user._id;
+            const documents = await Document_1.Document.find(query).sort({ uploadedAt: -1 });
             res.json(documents);
         }
         catch (error) {
@@ -14,7 +19,12 @@ exports.documentController = {
     },
     async getById(req, res) {
         try {
-            const document = await Document_1.Document.findOne({ id: req.params.id });
+            const query = { id: req.params.id };
+            if (req.user.microsoftId)
+                query.microsoftId = req.user.microsoftId;
+            else if (req.user._id)
+                query.userId = req.user._id;
+            const document = await Document_1.Document.findOne(query);
             if (!document) {
                 return res.status(404).json({ error: "Document not found" });
             }
@@ -26,17 +36,36 @@ exports.documentController = {
     },
     async create(req, res) {
         try {
-            const document = new Document_1.Document(req.body);
+            const user = req.user;
+            const docData = { ...req.body };
+            if (user.microsoftId) {
+                docData.microsoftId = user.microsoftId;
+            }
+            else if (user._id) {
+                docData.userId = user._id;
+            }
+            else {
+                return res.status(400).json({ error: "No user identifier found" });
+            }
+            const document = new Document_1.Document(docData);
             await document.save();
             res.status(201).json(document);
         }
         catch (error) {
+            console.error("Error creating document:", error);
             res.status(500).json({ error: "Failed to create document" });
         }
     },
     async update(req, res) {
         try {
-            const document = await Document_1.Document.findOneAndUpdate({ id: req.params.id }, req.body, { new: true });
+            const query = { id: req.params.id };
+            if (req.user.microsoftId)
+                query.microsoftId = req.user.microsoftId;
+            else if (req.user._id)
+                query.userId = req.user._id;
+            const document = await Document_1.Document.findOneAndUpdate(query, req.body, {
+                new: true,
+            });
             if (!document) {
                 return res.status(404).json({ error: "Document not found" });
             }
@@ -48,7 +77,12 @@ exports.documentController = {
     },
     async delete(req, res) {
         try {
-            const document = await Document_1.Document.findOneAndDelete({ id: req.params.id });
+            const query = { id: req.params.id };
+            if (req.user.microsoftId)
+                query.microsoftId = req.user.microsoftId;
+            else if (req.user._id)
+                query.userId = req.user._id;
+            const document = await Document_1.Document.findOneAndDelete(query);
             if (!document) {
                 return res.status(404).json({ error: "Document not found" });
             }

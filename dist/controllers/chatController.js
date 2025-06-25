@@ -5,7 +5,12 @@ const Chat_1 = require("../models/Chat");
 exports.chatController = {
     async getByDocumentId(req, res) {
         try {
-            const chats = await Chat_1.Chat.find({ documentId: req.params.documentId }).sort({ updatedAt: -1 });
+            const query = { documentId: req.params.documentId };
+            if (req.user.microsoftId)
+                query.microsoftId = req.user.microsoftId;
+            else if (req.user._id)
+                query.userId = req.user._id;
+            const chats = await Chat_1.Chat.find(query).sort({ updatedAt: -1 });
             res.json(chats);
         }
         catch (error) {
@@ -15,12 +20,21 @@ exports.chatController = {
     },
     async create(req, res) {
         try {
-            const chat = new Chat_1.Chat({
-                ...req.body,
-                messages: Array.isArray(req.body.messages)
-                    ? req.body.messages
-                    : [req.body.messages],
-            });
+            const user = req.user;
+            const chatData = { ...req.body };
+            if (user.microsoftId) {
+                chatData.microsoftId = user.microsoftId;
+            }
+            else if (user._id) {
+                chatData.userId = user._id;
+            }
+            else {
+                return res.status(400).json({ error: "No user identifier found" });
+            }
+            chatData.messages = Array.isArray(req.body.messages)
+                ? req.body.messages
+                : [req.body.messages];
+            const chat = new Chat_1.Chat(chatData);
             await chat.save();
             res.status(201).json(chat);
         }
@@ -31,7 +45,12 @@ exports.chatController = {
     },
     async addMessage(req, res) {
         try {
-            const chat = await Chat_1.Chat.findOne({ id: req.params.chatId });
+            const query = { id: req.params.chatId };
+            if (req.user.microsoftId)
+                query.microsoftId = req.user.microsoftId;
+            else if (req.user._id)
+                query.userId = req.user._id;
+            const chat = await Chat_1.Chat.findOne(query);
             if (!chat) {
                 return res.status(404).json({ error: "Chat not found" });
             }
@@ -51,7 +70,12 @@ exports.chatController = {
     },
     async update(req, res) {
         try {
-            const chat = await Chat_1.Chat.findOneAndUpdate({ id: req.params.id }, {
+            const query = { id: req.params.id };
+            if (req.user.microsoftId)
+                query.microsoftId = req.user.microsoftId;
+            else if (req.user._id)
+                query.userId = req.user._id;
+            const chat = await Chat_1.Chat.findOneAndUpdate(query, {
                 ...req.body,
                 messages: Array.isArray(req.body.messages)
                     ? req.body.messages
@@ -70,7 +94,12 @@ exports.chatController = {
     },
     async delete(req, res) {
         try {
-            const chat = await Chat_1.Chat.findOneAndDelete({ id: req.params.id });
+            const query = { id: req.params.id };
+            if (req.user.microsoftId)
+                query.microsoftId = req.user.microsoftId;
+            else if (req.user._id)
+                query.userId = req.user._id;
+            const chat = await Chat_1.Chat.findOneAndDelete(query);
             if (!chat) {
                 return res.status(404).json({ error: "Chat not found" });
             }

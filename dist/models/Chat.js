@@ -17,5 +17,15 @@ const chatSchema = new mongoose_1.default.Schema({
     messages: [messageSchema],
     updatedAt: { type: Date, default: Date.now },
     documentId: { type: String, required: true },
+    microsoftId: { type: String },
+    userId: { type: String },
+});
+chatSchema.pre("validate", function (next) {
+    if (!this.microsoftId && !this.userId) {
+        next(new Error("Either microsoftId or userId must be present."));
+    }
+    else {
+        next();
+    }
 });
 exports.Chat = mongoose_1.default.model("Chat", chatSchema);
