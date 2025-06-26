@@ -9,8 +9,13 @@ export const documentController = {
   async getAll(req: AuthRequest, res: Response) {
     try {
       const query: any = {};
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const documents = await Document.find(query).sort({ uploadedAt: -1 });
       res.json(documents);
     } catch (error) {
@@ -21,8 +26,13 @@ export const documentController = {
   async getById(req: AuthRequest, res: Response) {
     try {
       const query: any = { id: req.params.id };
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const document = await Document.findOne(query);
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
@@ -40,7 +50,7 @@ export const documentController = {
       if (user.microsoftId) {
         docData.microsoftId = user.microsoftId;
       } else if (user._id) {
-        docData.userId = user._id;
+        docData.userId = user._id.toString();
       } else {
         return res.status(400).json({ error: "No user identifier found" });
       }
@@ -56,8 +66,13 @@ export const documentController = {
   async update(req: AuthRequest, res: Response) {
     try {
       const query: any = { id: req.params.id };
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const document = await Document.findOneAndUpdate(query, req.body, {
         new: true,
       });
@@ -73,8 +88,13 @@ export const documentController = {
   async delete(req: AuthRequest, res: Response) {
     try {
       const query: any = { id: req.params.id };
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const document = await Document.findOneAndDelete(query);
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
