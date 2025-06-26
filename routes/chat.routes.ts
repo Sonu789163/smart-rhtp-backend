@@ -7,6 +7,9 @@ const router = express.Router();
 // Apply auth middleware to all routes
 router.use(authMiddleware);
 
+// Get all chats for the user
+router.get("/", chatController.getAll);
+
 // Get chat history for a document
 router.get("/document/:documentId", chatController.getByDocumentId);
 

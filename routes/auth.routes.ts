@@ -135,7 +135,13 @@ router.get("/callback", async (req, res) => {
 // Get current user
 router.get("/me", authMiddleware, async (req: any, res) => {
   try {
-    const user = await User.findById(req.user.userId);
+    let user = null;
+    if (req.user.microsoftId) {
+      user = await User.findOne({ microsoftId: req.user.microsoftId });
+    } else if (req.user._id) {
+      user = await User.findById(req.user._id);
+    }
+
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -155,11 +161,18 @@ router.get("/me", authMiddleware, async (req: any, res) => {
 // Get user history
 router.get("/history", authMiddleware, async (req: any, res) => {
   try {
-    const documents = await Document.find({
-      microsoftId: req.user.microsoftId,
-    });
-    const summaries = await Summary.find({ microsoftId: req.user.microsoftId });
-    const chats = await Chat.find({ microsoftId: req.user.microsoftId });
+    const query: any = {};
+    if (req.user.microsoftId) {
+      query.microsoftId = req.user.microsoftId;
+    } else if (req.user._id) {
+      query.userId = req.user._id.toString();
+    } else {
+      return res.status(400).json({ error: "No user identifier found" });
+    }
+
+    const documents = await Document.find(query);
+    const summaries = await Summary.find(query);
+    const chats = await Chat.find(query);
 
     res.json({
       documents,

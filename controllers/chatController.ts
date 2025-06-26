@@ -1,16 +1,40 @@
 import { Request, Response } from "express";
 import { Chat } from "../models/Chat";
+import { Document } from "../models/Document";
 
 interface AuthRequest extends Request {
   user?: any;
 }
 
 export const chatController = {
+  async getAll(req: AuthRequest, res: Response) {
+    try {
+      const query: any = {};
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
+      const chats = await Chat.find(query).sort({ updatedAt: -1 });
+      res.json(chats);
+    } catch (error) {
+      console.error("Error fetching chats:", error);
+      res.status(500).json({ error: "Failed to fetch chats" });
+    }
+  },
+
   async getByDocumentId(req: AuthRequest, res: Response) {
     try {
       const query: any = { documentId: req.params.documentId };
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const chats = await Chat.find(query).sort({ updatedAt: -1 });
       res.json(chats);
     } catch (error) {
@@ -23,13 +47,27 @@ export const chatController = {
     try {
       const user = req.user;
       const chatData = { ...req.body };
+
+      // Validate that the document belongs to the user
+      const documentQuery: any = { id: chatData.documentId };
       if (user.microsoftId) {
+        documentQuery.microsoftId = user.microsoftId;
         chatData.microsoftId = user.microsoftId;
       } else if (user._id) {
-        chatData.userId = user._id;
+        documentQuery.userId = user._id.toString();
+        chatData.userId = user._id.toString();
       } else {
         return res.status(400).json({ error: "No user identifier found" });
       }
+
+      // Check if document exists and belongs to user
+      const document = await Document.findOne(documentQuery);
+      if (!document) {
+        return res
+          .status(404)
+          .json({ error: "Document not found or access denied" });
+      }
+
       chatData.messages = Array.isArray(req.body.messages)
         ? req.body.messages
         : [req.body.messages];
@@ -45,8 +83,13 @@ export const chatController = {
   async addMessage(req: AuthRequest, res: Response) {
     try {
       const query: any = { id: req.params.chatId };
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const chat = await Chat.findOne(query);
       if (!chat) {
         return res.status(404).json({ error: "Chat not found" });
@@ -68,8 +111,13 @@ export const chatController = {
   async update(req: AuthRequest, res: Response) {
     try {
       const query: any = { id: req.params.id };
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const chat = await Chat.findOneAndUpdate(
         query,
         {
@@ -94,8 +142,13 @@ export const chatController = {
   async delete(req: AuthRequest, res: Response) {
     try {
       const query: any = { id: req.params.id };
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const chat = await Chat.findOneAndDelete(query);
       if (!chat) {
         return res.status(404).json({ error: "Chat not found" });

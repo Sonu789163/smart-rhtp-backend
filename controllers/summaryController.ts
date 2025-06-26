@@ -1,17 +1,41 @@
 import { Request, Response } from "express";
 import { Summary } from "../models/Summary";
+import { Document } from "../models/Document";
 
 interface AuthRequest extends Request {
   user?: any;
 }
 
 export const summaryController = {
+  async getAll(req: AuthRequest, res: Response) {
+    try {
+      const query: any = {};
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
+      const summaries = await Summary.find(query).sort({ updatedAt: -1 });
+      res.json(summaries);
+    } catch (error) {
+      console.error("Error fetching summaries:", error);
+      res.status(500).json({ message: "Error fetching summaries" });
+    }
+  },
+
   async getByDocumentId(req: AuthRequest, res: Response) {
     try {
       const { documentId } = req.params;
       const query: any = { documentId };
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const summaries = await Summary.find(query).sort({ updatedAt: -1 });
       res.json(summaries);
     } catch (error) {
@@ -30,6 +54,25 @@ export const summaryController = {
         });
       }
       const user = req.user;
+
+      // Validate that the document belongs to the user
+      const documentQuery: any = { id: documentId };
+      if (user.microsoftId) {
+        documentQuery.microsoftId = user.microsoftId;
+      } else if (user._id) {
+        documentQuery.userId = user._id.toString();
+      } else {
+        return res.status(400).json({ message: "No user identifier found" });
+      }
+
+      // Check if document exists and belongs to user
+      const document = await Document.findOne(documentQuery);
+      if (!document) {
+        return res
+          .status(404)
+          .json({ error: "Document not found or access denied" });
+      }
+
       const summaryData: any = {
         id: Date.now().toString(),
         title,
@@ -41,7 +84,7 @@ export const summaryController = {
       if (user.microsoftId) {
         summaryData.microsoftId = user.microsoftId;
       } else if (user._id) {
-        summaryData.userId = user._id;
+        summaryData.userId = user._id.toString();
       } else {
         return res.status(400).json({ message: "No user identifier found" });
       }
@@ -63,8 +106,13 @@ export const summaryController = {
     try {
       const { id } = req.params;
       const query: any = { id };
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const summary = await Summary.findOneAndUpdate(query, req.body, {
         new: true,
       });
@@ -87,8 +135,13 @@ export const summaryController = {
     try {
       const { id } = req.params;
       const query: any = { id };
-      if (req.user.microsoftId) query.microsoftId = req.user.microsoftId;
-      else if (req.user._id) query.userId = req.user._id;
+      if (req.user.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
+      }
       const summary = await Summary.findOneAndDelete(query);
       if (!summary) {
         return res.status(404).json({ message: "Summary not found" });

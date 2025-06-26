@@ -21,7 +21,14 @@ export const authMiddleware = async (
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    const user = await User.findOne({ microsoftId: decoded.microsoftId });
+
+    // Try to find user by microsoftId first, then by _id
+    let user = null;
+    if (decoded.microsoftId) {
+      user = await User.findOne({ microsoftId: decoded.microsoftId });
+    } else if (decoded.userId) {
+      user = await User.findById(decoded.userId);
+    }
 
     if (!user) {
       return res.status(401).json({ message: "Token is not valid" });

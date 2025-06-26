@@ -7,6 +7,9 @@ const router = express.Router();
 // Apply auth middleware to all routes
 router.use(authMiddleware);
 
+// Get all summaries for the user
+router.get("/", summaryController.getAll);
+
 // Get summaries for a document
 router.get("/document/:documentId", summaryController.getByDocumentId);
 
