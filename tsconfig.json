@@ -15,6 +15,13 @@
       "*": ["node_modules/*"]
     }
   },
-  "include": ["src/**/*", "controllers", "models", "routes", "index.ts"],
+  "include": [
+    "src/**/*",
+    "controllers",
+    "models",
+    "routes",
+    "config",
+    "index.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }
