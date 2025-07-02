@@ -9,6 +9,8 @@ const auth_1 = require("../middleware/auth");
 const router = express_1.default.Router();
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
+// Get all chats for the user
+router.get("/", chatController_1.chatController.getAll);
 // Get chat history for a document
 router.get("/document/:documentId", chatController_1.chatController.getByDocumentId);
 // Create new chat

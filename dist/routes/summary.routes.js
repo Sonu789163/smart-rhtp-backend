@@ -9,6 +9,8 @@ const auth_1 = require("../middleware/auth");
 const router = express_1.default.Router();
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
+// Get all summaries for the user
+router.get("/", summaryController_1.summaryController.getAll);
 // Get summaries for a document
 router.get("/document/:documentId", summaryController_1.summaryController.getByDocumentId);
 // Create new summary

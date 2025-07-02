@@ -16,7 +16,14 @@ const authMiddleware = async (req, res, next) => {
                 .json({ message: "No token, authorization denied" });
         }
         const decoded = jsonwebtoken_1.default.verify(token, process.env.JWT_SECRET);
-        const user = await User_1.User.findOne({ microsoftId: decoded.microsoftId });
+        // Try to find user by microsoftId first, then by _id
+        let user = null;
+        if (decoded.microsoftId) {
+            user = await User_1.User.findOne({ microsoftId: decoded.microsoftId });
+        }
+        else if (decoded.userId) {
+            user = await User_1.User.findById(decoded.userId);
+        }
         if (!user) {
             return res.status(401).json({ message: "Token is not valid" });
         }
