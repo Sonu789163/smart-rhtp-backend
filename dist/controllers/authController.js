@@ -9,7 +9,7 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const User_1 = require("../models/User");
 // Helper to generate tokens
 const generateTokens = async (user) => {
-    const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "24h" });
+    const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "1h" });
     const refreshToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
     // Store refresh token
     if (!user.refreshTokens) {
@@ -71,7 +71,7 @@ exports.authController = {
             if (!user || !user.refreshTokens.includes(token)) {
                 return res.status(403).json({ message: "Invalid refresh token" });
             }
-            const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "24h" });
+            const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "1h" });
             res.json({ accessToken });
         }
         catch (error) {

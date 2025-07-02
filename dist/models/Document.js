@@ -13,6 +13,7 @@ const documentSchema = new mongoose_1.default.Schema({
     status: { type: String, default: "completed" },
     microsoftId: { type: String },
     userId: { type: String },
+    fileId: { type: mongoose_1.default.Schema.Types.ObjectId, required: true },
 });
 documentSchema.pre("validate", function (next) {
     if (!this.microsoftId && !this.userId) {

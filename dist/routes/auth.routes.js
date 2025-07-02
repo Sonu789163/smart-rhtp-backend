@@ -108,7 +108,13 @@ router.get("/callback", async (req, res) => {
 // Get current user
 router.get("/me", auth_1.authMiddleware, async (req, res) => {
     try {
-        const user = await User_1.User.findById(req.user.userId);
+        let user = null;
+        if (req.user.microsoftId) {
+            user = await User_1.User.findOne({ microsoftId: req.user.microsoftId });
+        }
+        else if (req.user._id) {
+            user = await User_1.User.findById(req.user._id);
+        }
         if (!user) {
             return res.status(404).json({ message: "User not found" });
         }
@@ -128,11 +134,19 @@ router.get("/me", auth_1.authMiddleware, async (req, res) => {
 // Get user history
 router.get("/history", auth_1.authMiddleware, async (req, res) => {
     try {
-        const documents = await Document_1.Document.find({
-            microsoftId: req.user.microsoftId,
-        });
-        const summaries = await Summary_1.Summary.find({ microsoftId: req.user.microsoftId });
-        const chats = await Chat_1.Chat.find({ microsoftId: req.user.microsoftId });
+        const query = {};
+        if (req.user.microsoftId) {
+            query.microsoftId = req.user.microsoftId;
+        }
+        else if (req.user._id) {
+            query.userId = req.user._id.toString();
+        }
+        else {
+            return res.status(400).json({ error: "No user identifier found" });
+        }
+        const documents = await Document_1.Document.find(query);
+        const summaries = await Summary_1.Summary.find(query);
+        const chats = await Chat_1.Chat.find(query);
         res.json({
             documents,
             summaries,
