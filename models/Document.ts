@@ -8,6 +8,7 @@ const documentSchema = new mongoose.Schema({
   status: { type: String, default: "completed" },
   microsoftId: { type: String },
   userId: { type: String },
+  fileId: { type: mongoose.Schema.Types.ObjectId, required: true },
 });
 
 documentSchema.pre("validate", function (next) {
