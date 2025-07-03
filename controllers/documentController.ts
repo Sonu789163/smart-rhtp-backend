@@ -129,11 +129,12 @@ export const documentController = {
       const originalname = req.file.originalname;
       const fileId = (req.file as any).id;
       const user = (req as any).user;
+      // Use namespace from frontend if present, else fallback to originalname
       const docData: any = {
         id: fileId.toString(),
         name: originalname,
         fileId: fileId,
-        namespace: originalname,
+        namespace: req.body.namespace || originalname,
       };
       if (user?.microsoftId) {
         docData.microsoftId = user.microsoftId;
