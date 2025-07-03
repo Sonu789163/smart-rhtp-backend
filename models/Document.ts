@@ -4,7 +4,7 @@ const documentSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   name: { type: String, required: true },
   uploadedAt: { type: Date, default: Date.now },
-  namespace: { type: String },
+  namespace: { type: String , required: true},
   status: { type: String, default: "completed" },
   microsoftId: { type: String },
   userId: { type: String },
