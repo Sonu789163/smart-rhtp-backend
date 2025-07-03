@@ -129,6 +129,7 @@ export const documentController = {
         id: fileId.toString(),
         name: originalname,
         fileId: fileId,
+        namespace: originalname,
       };
       if (user?.microsoftId) {
         docData.microsoftId = user.microsoftId;
