@@ -59,6 +59,10 @@ export const documentController = {
       } else {
         return res.status(400).json({ error: "No user identifier found" });
       }
+      // Ensure namespace is always set
+      if (!docData.namespace) {
+        docData.namespace = docData.name;
+      }
       const document = new Document(docData);
       await document.save();
       res.status(201).json(document);
