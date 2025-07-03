@@ -64,6 +64,10 @@ exports.documentController = {
             else {
                 return res.status(400).json({ error: "No user identifier found" });
             }
+            // Ensure namespace is always set
+            if (!docData.namespace) {
+                docData.namespace = docData.name;
+            }
             const document = new Document_1.Document(docData);
             await document.save();
             res.status(201).json(document);
@@ -134,10 +138,12 @@ exports.documentController = {
             const originalname = req.file.originalname;
             const fileId = req.file.id;
             const user = req.user;
+            // Use namespace from frontend if present, else fallback to originalname
             const docData = {
                 id: fileId.toString(),
                 name: originalname,
                 fileId: fileId,
+                namespace: req.body.namespace || originalname,
             };
             if (user === null || user === void 0 ? void 0 : user.microsoftId) {
                 docData.microsoftId = user.microsoftId;
@@ -160,8 +166,10 @@ exports.documentController = {
                 contentType: "application/pdf",
             });
             form.append("documentId", document.id);
+            form.append("namespace", document.name);
             form.append("name", document.name);
             form.append("userId", document.userId || document.microsoftId);
+            console.log("fromData", form);
             try {
                 await axios_1.default.post(n8nWebhookUrl, form, {
                     headers: form.getHeaders(),
