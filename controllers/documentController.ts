@@ -157,8 +157,8 @@ export const documentController = {
         contentType: "application/pdf",
       });
       form.append("documentId", document.id);
-      form.append("name", document.name);
       form.append("namespace", document.name);
+      form.append("name", document.name);
       form.append("userId", document.userId || document.microsoftId);
 
       try {
