@@ -161,6 +161,7 @@ export const documentController = {
       form.append("namespace", document.name);
       form.append("name", document.name);
       form.append("userId", document.userId || document.microsoftId);
+      console.log("fromData", form)
 
       try {
         await axios.post(n8nWebhookUrl, form, {
