@@ -1,5 +1,7 @@
 import { GridFsStorage } from "multer-gridfs-storage";
 import dotenv from "dotenv";
+import mongoose from "mongoose";
+import { GridFSBucket } from "mongodb";
 dotenv.config();
 
 const mongoURI =
@@ -15,3 +17,7 @@ export const storage = new GridFsStorage({
     };
   },
 });
+
+export function getGridFSBucket() {
+  return new GridFSBucket(mongoose.connection.db, { bucketName: "uploads" });
+}
