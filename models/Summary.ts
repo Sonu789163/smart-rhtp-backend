@@ -8,6 +8,7 @@ const summarySchema = new mongoose.Schema({
   documentId: { type: String, required: true },
   microsoftId: { type: String },
   userId: { type: String },
+  pdfFileId: { type: mongoose.Schema.Types.ObjectId, ref: "uploads.files" },
   metadata: {
     pageCount: Number,
     url: String,

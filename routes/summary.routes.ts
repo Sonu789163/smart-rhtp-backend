@@ -22,4 +22,7 @@ router.put("/:id", summaryController.update);
 // Delete summary
 router.delete("/:id", summaryController.delete);
 
+// Download PDF for a summary
+router.get("/:id/download-pdf", summaryController.downloadPdf);
+
 export default router;

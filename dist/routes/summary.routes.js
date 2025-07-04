@@ -19,4 +19,6 @@ router.post("/", summaryController_1.summaryController.create);
 router.put("/:id", summaryController_1.summaryController.update);
 // Delete summary
 router.delete("/:id", summaryController_1.summaryController.delete);
+// Download PDF for a summary
+router.get("/:id/download-pdf", summaryController_1.summaryController.downloadPdf);
 exports.default = router;

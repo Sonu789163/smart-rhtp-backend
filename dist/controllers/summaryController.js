@@ -1,8 +1,13 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.summaryController = void 0;
 const Summary_1 = require("../models/Summary");
 const Document_1 = require("../models/Document");
+const axios_1 = __importDefault(require("axios"));
+const gridfs_1 = require("../config/gridfs");
 exports.summaryController = {
     async getAll(req, res) {
         try {
@@ -73,6 +78,29 @@ exports.summaryController = {
                     .status(404)
                     .json({ error: "Document not found or access denied" });
             }
+            let pdfFileId = null;
+            // If metadata.url exists, download and store PDF in GridFS
+            if (metadata && metadata.url) {
+                try {
+                    const bucket = (0, gridfs_1.getGridFSBucket)();
+                    const response = await axios_1.default.get(metadata.url, {
+                        responseType: "stream",
+                    });
+                    const uploadStream = bucket.openUploadStream(`${title}.pdf`, {
+                        contentType: "application/pdf",
+                    });
+                    await new Promise((resolve, reject) => {
+                        response.data
+                            .pipe(uploadStream)
+                            .on("error", reject)
+                            .on("finish", resolve);
+                    });
+                    pdfFileId = uploadStream.id;
+                }
+                catch (err) {
+                    console.error("Failed to download/upload PDF to GridFS:", err);
+                }
+            }
             const summaryData = {
                 id: Date.now().toString(),
                 title,
@@ -80,6 +108,7 @@ exports.summaryController = {
                 documentId,
                 updatedAt: new Date(),
                 metadata,
+                pdfFileId,
             };
             if (user.microsoftId) {
                 summaryData.microsoftId = user.microsoftId;
@@ -101,6 +130,25 @@ exports.summaryController = {
                 message: "Error creating summary",
                 error: errorMessage,
             });
+        }
+    },
+    // New endpoint: Download PDF from GridFS by summary ID
+    async downloadPdf(req, res) {
+        try {
+            const { id } = req.params;
+            const summary = await Summary_1.Summary.findOne({ id });
+            if (!summary || !summary.pdfFileId) {
+                return res
+                    .status(404)
+                    .json({ error: "PDF not found for this summary" });
+            }
+            const bucket = (0, gridfs_1.getGridFSBucket)();
+            res.set("Content-Type", "application/pdf");
+            bucket.openDownloadStream(summary.pdfFileId).pipe(res);
+        }
+        catch (error) {
+            console.error("Error downloading PDF from GridFS:", error);
+            res.status(500).json({ error: "Failed to download PDF" });
         }
     },
     async update(req, res) {
