@@ -8,6 +8,12 @@ const Summary_1 = require("../models/Summary");
 const Document_1 = require("../models/Document");
 const axios_1 = __importDefault(require("axios"));
 const gridfs_1 = require("../config/gridfs");
+const promises_1 = require("fs/promises");
+const child_process_1 = require("child_process");
+const util_1 = require("util");
+const path_1 = __importDefault(require("path"));
+const os_1 = __importDefault(require("os"));
+const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.summaryController = {
     async getAll(req, res) {
         try {
@@ -149,6 +155,35 @@ exports.summaryController = {
         catch (error) {
             console.error("Error downloading PDF from GridFS:", error);
             res.status(500).json({ error: "Failed to download PDF" });
+        }
+    },
+    // Endpoint: Download DOCX generated from HTML content by summary ID
+    async downloadDocx(req, res) {
+        try {
+            const { id } = req.params;
+            const summary = await Summary_1.Summary.findOne({ id });
+            if (!summary || !summary.content) {
+                return res.status(404).json({ error: "Summary not found" });
+            }
+            // Write HTML to a temp file
+            const tmpDir = os_1.default.tmpdir();
+            const htmlPath = path_1.default.join(tmpDir, `summary_${id}.html`);
+            const docxPath = path_1.default.join(tmpDir, `summary_${id}.docx`);
+            await (0, promises_1.writeFile)(htmlPath, summary.content, "utf8");
+            // Convert HTML to DOCX using Pandoc
+            await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
+            // Send DOCX file
+            res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+            res.setHeader("Content-Disposition", `attachment; filename="${summary.title || "summary"}.docx"`);
+            res.sendFile(docxPath, async (err) => {
+                // Clean up temp files
+                await (0, promises_1.unlink)(htmlPath);
+                await (0, promises_1.unlink)(docxPath);
+            });
+        }
+        catch (error) {
+            console.error("Error generating DOCX with Pandoc:", error);
+            res.status(500).json({ error: "Failed to generate DOCX" });
         }
     },
     async update(req, res) {
