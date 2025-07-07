@@ -22,7 +22,8 @@
     "routes",
     "config",
     "index.ts",
-    "form-data.d.ts"
+    "form-data.d.ts",
+    "types/**/*.d.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

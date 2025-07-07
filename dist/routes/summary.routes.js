@@ -21,4 +21,6 @@ router.put("/:id", summaryController_1.summaryController.update);
 router.delete("/:id", summaryController_1.summaryController.delete);
 // Download PDF for a summary
 router.get("/:id/download-pdf", summaryController_1.summaryController.downloadPdf);
+// Download DOCX for a summary
+router.get("/:id/download-docx", summaryController_1.summaryController.downloadDocx);
 exports.default = router;

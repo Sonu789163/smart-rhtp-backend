@@ -1,9 +1,19 @@
+/// <reference path="../types/html-docx-js.d.ts" />
 import { Request, Response } from "express";
 import { Summary } from "../models/Summary";
 import { Document } from "../models/Document";
 import axios from "axios";
 import mongoose from "mongoose";
 import { getGridFSBucket } from "../config/gridfs";
+import htmlDocx from "html-docx-js";
+import mammoth from "mammoth";
+import { writeFile, unlink } from "fs/promises";
+import { exec } from "child_process";
+import { promisify } from "util";
+import path from "path";
+import os from "os";
+
+const execAsync = promisify(exec);
 
 interface AuthRequest extends Request {
   user?: any;
@@ -141,6 +151,44 @@ export const summaryController = {
     } catch (error) {
       console.error("Error downloading PDF from GridFS:", error);
       res.status(500).json({ error: "Failed to download PDF" });
+    }
+  },
+
+  // Endpoint: Download DOCX generated from HTML content by summary ID
+  async downloadDocx(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const summary = await Summary.findOne({ id });
+      if (!summary || !summary.content) {
+        return res.status(404).json({ error: "Summary not found" });
+      }
+
+      // Write HTML to a temp file
+      const tmpDir = os.tmpdir();
+      const htmlPath = path.join(tmpDir, `summary_${id}.html`);
+      const docxPath = path.join(tmpDir, `summary_${id}.docx`);
+      await writeFile(htmlPath, summary.content, "utf8");
+
+      // Convert HTML to DOCX using Pandoc
+      await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
+
+      // Send DOCX file
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${summary.title || "summary"}.docx"`
+      );
+      res.sendFile(docxPath, async (err) => {
+        // Clean up temp files
+        await unlink(htmlPath);
+        await unlink(docxPath);
+      });
+    } catch (error) {
+      console.error("Error generating DOCX with Pandoc:", error);
+      res.status(500).json({ error: "Failed to generate DOCX" });
     }
   },
 
