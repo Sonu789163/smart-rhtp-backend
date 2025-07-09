@@ -17,7 +17,7 @@ const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
 // Middleware
 app.use((0, cors_1.default)({
-    origin: process.env.FRONTEND_URL, // removed trailing slash
+    origin: "https://rhp-document-summarizer.vercel.app", // process.env.FRONTEND_URL , // removed trailing slash
     credentials: true, // if you use cookies/auth
 }));
 app.use(express_1.default.json());
