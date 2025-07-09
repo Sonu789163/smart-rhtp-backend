@@ -1,6 +1,6 @@
-# Smart RHP Backend
+# Smart DRHP Backend
 
-This is the backend for the Smart RHP Document Assistant platform. It provides RESTful APIs for document upload, management, AI-powered summarization, and chat functionality, with secure authentication and user management.
+This is the backend for the Smart DRHP Document Assistant platform. It provides RESTful APIs for document upload, management, AI-powered summarization, and chat functionality, with secure authentication and user management.
 
 ## Features
 
