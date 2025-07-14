@@ -208,4 +208,42 @@ exports.documentController = {
             res.status(500).json({ error: "Failed to download document" });
         }
     },
+    async checkExistingByNamespace(req, res) {
+        try {
+            const { namespace } = req.query;
+            if (!namespace) {
+                return res
+                    .status(400)
+                    .json({ error: "Namespace parameter is required" });
+            }
+            const query = { namespace: namespace };
+            if (req.user.microsoftId) {
+                query.microsoftId = req.user.microsoftId;
+            }
+            else if (req.user._id) {
+                query.userId = req.user._id.toString();
+            }
+            else {
+                return res.status(400).json({ error: "No user identifier found" });
+            }
+            const existingDocument = await Document_1.Document.findOne(query);
+            if (existingDocument) {
+                res.json({
+                    exists: true,
+                    document: existingDocument,
+                    message: "Document with this name already exists",
+                });
+            }
+            else {
+                res.json({
+                    exists: false,
+                    message: "Document with this name does not exist",
+                });
+            }
+        }
+        catch (error) {
+            console.error("Error checking existing document:", error);
+            res.status(500).json({ error: "Failed to check existing document" });
+        }
+    },
 };
