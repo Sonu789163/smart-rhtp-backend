@@ -17,6 +17,8 @@ const upload = (0, multer_1.default)({
 });
 // Get all documents for current user
 router.get("/", documentController_1.documentController.getAll);
+// Check if document exists by namespace
+router.get("/check-existing", documentController_1.documentController.checkExistingByNamespace);
 // Get single document
 router.get("/:id", documentController_1.documentController.getById);
 // Create document

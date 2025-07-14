@@ -18,6 +18,9 @@ const upload = multer({
 // Get all documents for current user
 router.get("/", documentController.getAll);
 
+// Check if document exists by namespace
+router.get("/check-existing", documentController.checkExistingByNamespace);
+
 // Get single document
 router.get("/:id", documentController.getById);
 

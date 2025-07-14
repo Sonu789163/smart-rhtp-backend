@@ -1,6 +1,8 @@
 # Node
 node_modules/
 
+#code file 
+insertSummaryWithPdf.js
 
 # Environment files
 .env
