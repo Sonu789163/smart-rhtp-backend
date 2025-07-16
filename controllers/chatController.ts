@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { Chat } from "../models/Chat";
 import { Document } from "../models/Document";
+import { io } from "../index";
 
 interface AuthRequest extends Request {
   user?: any;
@@ -157,6 +158,35 @@ export const chatController = {
     } catch (error) {
       console.error("Error deleting chat:", error);
       res.status(500).json({ error: "Failed to delete chat" });
+    }
+  },
+
+  async chatStatusUpdate(req: Request, res: Response) {
+    try {
+      const { jobId, status, error } = req.body;
+      if (!jobId || !status) {
+        return res.status(400).json({ message: "Missing jobId or status" });
+      }
+      // Only emit on failure
+      if (status.trim().toLowerCase() === "failed") {
+        console.log("Emitting chat_status:", { jobId, status, error });
+        io.emit("chat_status", { jobId, status, error });
+      }
+      res
+        .status(200)
+        .json({
+          message: "Chat status update processed",
+          jobId,
+          status,
+          error,
+        });
+    } catch (err) {
+      res
+        .status(500)
+        .json({
+          message: "Failed to process chat status update",
+          error: err instanceof Error ? err.message : err,
+        });
     }
   },
 };

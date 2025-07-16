@@ -34,6 +34,8 @@ function (err, req, res, next) {
     }
     next(err);
 }, documentController_1.documentController.uploadDocument);
+// POST /upload-status/update (for n8n to notify upload status)
+router.post("/upload-status/update", documentController_1.documentController.uploadStatusUpdate);
 // Download/view PDF document
 router.get("/download/:id", documentController_1.documentController.downloadDocument);
 // Update document
