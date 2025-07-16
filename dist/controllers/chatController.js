@@ -174,9 +174,7 @@ exports.chatController = {
                 console.log("Emitting chat_status:", { jobId, status, error });
                 index_1.io.emit("chat_status", { jobId, status, error });
             }
-            res
-                .status(200)
-                .json({
+            res.status(200).json({
                 message: "Chat status update processed",
                 jobId,
                 status,
@@ -184,9 +182,7 @@ exports.chatController = {
             });
         }
         catch (err) {
-            res
-                .status(500)
-                .json({
+            res.status(500).json({
                 message: "Failed to process chat status update",
                 error: err instanceof Error ? err.message : err,
             });
