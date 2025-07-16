@@ -28,4 +28,7 @@ router.get("/:id/download-pdf", summaryController.downloadPdf);
 // Download DOCX for a summary
 router.get("/:id/download-docx", summaryController.downloadDocx);
 
+// POST /summary-status/update (for n8n to notify status)
+router.post("/summary-status/update", summaryController.summaryStatusUpdate);
+
 export default router;

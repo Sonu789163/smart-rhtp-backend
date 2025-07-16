@@ -23,4 +23,6 @@ router.delete("/:id", summaryController_1.summaryController.delete);
 router.get("/:id/download-pdf", summaryController_1.summaryController.downloadPdf);
 // Download DOCX for a summary
 router.get("/:id/download-docx", summaryController_1.summaryController.downloadDocx);
+// POST /summary-status/update (for n8n to notify status)
+router.post("/summary-status/update", summaryController_1.summaryController.summaryStatusUpdate);
 exports.default = router;

@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.io = void 0;
 const express_1 = __importDefault(require("express"));
 const mongoose_1 = __importDefault(require("mongoose"));
 const cors_1 = __importDefault(require("cors"));
@@ -12,8 +13,21 @@ const document_routes_1 = __importDefault(require("./routes/document.routes"));
 const chat_routes_1 = __importDefault(require("./routes/chat.routes"));
 const summary_routes_1 = __importDefault(require("./routes/summary.routes"));
 const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
+const http_1 = __importDefault(require("http"));
+const socket_io_1 = require("socket.io");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
+const server = http_1.default.createServer(app);
+const io = new socket_io_1.Server(server, {
+    cors: {
+        origin: [
+            "https://rhp-document-summarizer.vercel.app",
+            "http://localhost:8080",
+        ],
+        credentials: true,
+    },
+});
+exports.io = io;
 const PORT = process.env.PORT || 5000;
 // Middleware
 app.use((0, cors_1.default)({
@@ -45,7 +59,7 @@ app.use("/api/summaries", summary_routes_1.default);
 app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });
 });
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
 // Allow only your frontend domain
