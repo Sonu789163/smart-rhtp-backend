@@ -12,6 +12,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import os from "os";
+import { io } from "../index";
 
 const execAsync = promisify(exec);
 
@@ -245,6 +246,27 @@ export const summaryController = {
         message: "Error deleting summary",
         error: errorMessage,
       });
+    }
+  },
+
+  async summaryStatusUpdate(req: Request, res: Response) {
+    try {
+      const { jobId, status, content, error } = req.body;
+      if (!jobId || !status) {
+        return res.status(400).json({ message: "Missing jobId or status" });
+      }
+      // Emit real-time update
+      io.emit("summary_status", { jobId, status, content, error });
+      res
+        .status(200)
+        .json({ message: "Status update emitted", jobId, status, error });
+    } catch (err) {
+      res
+        .status(500)
+        .json({
+          message: "Failed to emit status update",
+          error: err instanceof Error ? err.message : err,
+        });
     }
   },
 };

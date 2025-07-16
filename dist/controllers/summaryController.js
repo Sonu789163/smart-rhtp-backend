@@ -13,6 +13,7 @@ const child_process_1 = require("child_process");
 const util_1 = require("util");
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
+const index_1 = require("../index");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.summaryController = {
     async getAll(req, res) {
@@ -241,6 +242,27 @@ exports.summaryController = {
             res.status(500).json({
                 message: "Error deleting summary",
                 error: errorMessage,
+            });
+        }
+    },
+    async summaryStatusUpdate(req, res) {
+        try {
+            const { jobId, status, content, error } = req.body;
+            if (!jobId || !status) {
+                return res.status(400).json({ message: "Missing jobId or status" });
+            }
+            // Emit real-time update
+            index_1.io.emit("summary_status", { jobId, status, content, error });
+            res
+                .status(200)
+                .json({ message: "Status update emitted", jobId, status, error });
+        }
+        catch (err) {
+            res
+                .status(500)
+                .json({
+                message: "Failed to emit status update",
+                error: err instanceof Error ? err.message : err,
             });
         }
     },
