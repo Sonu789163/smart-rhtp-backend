@@ -153,13 +153,11 @@ export const documentController = {
       const conn = mongoose.connection;
       const bucket = new GridFSBucket(conn.db, { bucketName: "uploads" });
 
-      const token = localStorage.getItem("accessToken");
       const form = new FormData();
       form.append("file", bucket.openDownloadStream(document.fileId), {
         filename: document.name,
         contentType: "application/pdf",
       });
-      form.append("token", token);
       form.append("documentId", document.id);
       form.append("namespace", document.name);
       form.append("name", document.name);
