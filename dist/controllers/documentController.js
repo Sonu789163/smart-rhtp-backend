@@ -161,11 +161,13 @@ exports.documentController = {
             const n8nWebhookUrl = "https://n8n-excollo.azurewebsites.net/webhook/bfda1ff3-99be-4f6e-995f-7728ca5b2f6a";
             const conn = mongoose_1.default.connection;
             const bucket = new mongodb_1.GridFSBucket(conn.db, { bucketName: "uploads" });
+            const token = localStorage.getItem("accessToken");
             const form = new form_data_1.default();
             form.append("file", bucket.openDownloadStream(document.fileId), {
                 filename: document.name,
                 contentType: "application/pdf",
             });
+            form.append("token", token);
             form.append("documentId", document.id);
             form.append("namespace", document.name);
             form.append("name", document.name);
@@ -258,9 +260,7 @@ exports.documentController = {
                 console.log("Emitting upload_status:", { jobId, status, error });
                 index_1.io.emit("upload_status", { jobId, status, error });
             }
-            res
-                .status(200)
-                .json({
+            res.status(200).json({
                 message: "Upload status update processed",
                 jobId,
                 status,
@@ -268,9 +268,7 @@ exports.documentController = {
             });
         }
         catch (err) {
-            res
-                .status(500)
-                .json({
+            res.status(500).json({
                 message: "Failed to process upload status update",
                 error: err instanceof Error ? err.message : err,
             });

@@ -172,21 +172,17 @@ export const chatController = {
         console.log("Emitting chat_status:", { jobId, status, error });
         io.emit("chat_status", { jobId, status, error });
       }
-      res
-        .status(200)
-        .json({
-          message: "Chat status update processed",
-          jobId,
-          status,
-          error,
-        });
+      res.status(200).json({
+        message: "Chat status update processed",
+        jobId,
+        status,
+        error,
+      });
     } catch (err) {
-      res
-        .status(500)
-        .json({
-          message: "Failed to process chat status update",
-          error: err instanceof Error ? err.message : err,
-        });
+      res.status(500).json({
+        message: "Failed to process chat status update",
+        error: err instanceof Error ? err.message : err,
+      });
     }
   },
 };
