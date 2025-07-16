@@ -9,6 +9,8 @@ const auth_1 = require("../middleware/auth");
 const multer_1 = __importDefault(require("multer"));
 const gridfs_1 = require("../config/gridfs");
 const router = express_1.default.Router();
+// POST /upload-status/update (for n8n to notify upload status)
+router.post("/upload-status/update", documentController_1.documentController.uploadStatusUpdate);
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
 const upload = (0, multer_1.default)({
@@ -34,8 +36,6 @@ function (err, req, res, next) {
     }
     next(err);
 }, documentController_1.documentController.uploadDocument);
-// POST /upload-status/update (for n8n to notify upload status)
-router.post("/upload-status/update", documentController_1.documentController.uploadStatusUpdate);
 // Download/view PDF document
 router.get("/download/:id", documentController_1.documentController.downloadDocument);
 // Update document
