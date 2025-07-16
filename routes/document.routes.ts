@@ -7,6 +7,9 @@ import { storage } from "../config/gridfs";
 
 const router = express.Router();
 
+// POST /upload-status/update (for n8n to notify upload status)
+router.post("/upload-status/update", documentController.uploadStatusUpdate);
+
 // Apply auth middleware to all routes
 router.use(authMiddleware);
 
@@ -43,8 +46,7 @@ router.post(
   documentController.uploadDocument
 );
 
-// POST /upload-status/update (for n8n to notify upload status)
-router.post("/upload-status/update", documentController.uploadStatusUpdate);
+
 
 // Download/view PDF document
 router.get("/download/:id", documentController.downloadDocument);
