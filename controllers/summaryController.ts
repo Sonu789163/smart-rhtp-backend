@@ -255,18 +255,17 @@ export const summaryController = {
       if (!jobId || !status) {
         return res.status(400).json({ message: "Missing jobId or status" });
       }
+      console.log("Emitting summary_status:", { jobId, status, error });
       // Emit real-time update
       io.emit("summary_status", { jobId, status, error });
       res
         .status(200)
         .json({ message: "Status update emitted", jobId, status, error });
     } catch (err) {
-      res
-        .status(500)
-        .json({
-          message: "Failed to emit status update",
-          error: err instanceof Error ? err.message : err,
-        });
+      res.status(500).json({
+        message: "Failed to emit status update",
+        error: err instanceof Error ? err.message : err,
+      });
     }
   },
 };

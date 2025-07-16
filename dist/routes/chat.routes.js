@@ -21,4 +21,6 @@ router.post("/:chatId/messages", chatController_1.chatController.addMessage);
 router.put("/:id", chatController_1.chatController.update);
 // Delete chat
 router.delete("/:id", chatController_1.chatController.delete);
+// POST /chat-status/update (for n8n to notify chat status)
+router.post("/chat-status/update", chatController_1.chatController.chatStatusUpdate);
 exports.default = router;

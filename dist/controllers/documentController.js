@@ -9,6 +9,7 @@ const mongoose_1 = __importDefault(require("mongoose"));
 const mongodb_1 = require("mongodb");
 const axios_1 = __importDefault(require("axios"));
 const form_data_1 = __importDefault(require("form-data"));
+const index_1 = require("../index");
 exports.documentController = {
     async getAll(req, res) {
         try {
@@ -244,6 +245,35 @@ exports.documentController = {
         catch (error) {
             console.error("Error checking existing document:", error);
             res.status(500).json({ error: "Failed to check existing document" });
+        }
+    },
+    async uploadStatusUpdate(req, res) {
+        try {
+            const { jobId, status, error } = req.body;
+            if (!jobId || !status) {
+                return res.status(400).json({ message: "Missing jobId or status" });
+            }
+            // Only emit on failure
+            if (status.trim().toLowerCase() === "failed") {
+                console.log("Emitting upload_status:", { jobId, status, error });
+                index_1.io.emit("upload_status", { jobId, status, error });
+            }
+            res
+                .status(200)
+                .json({
+                message: "Upload status update processed",
+                jobId,
+                status,
+                error,
+            });
+        }
+        catch (err) {
+            res
+                .status(500)
+                .json({
+                message: "Failed to process upload status update",
+                error: err instanceof Error ? err.message : err,
+            });
         }
     },
 };
