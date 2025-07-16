@@ -251,12 +251,12 @@ export const summaryController = {
 
   async summaryStatusUpdate(req: Request, res: Response) {
     try {
-      const { jobId, status, content, error } = req.body;
+      const { jobId, status, error } = req.body;
       if (!jobId || !status) {
         return res.status(400).json({ message: "Missing jobId or status" });
       }
       // Emit real-time update
-      io.emit("summary_status", { jobId, status, content, error });
+      io.emit("summary_status", { jobId, status, error });
       res
         .status(200)
         .json({ message: "Status update emitted", jobId, status, error });
