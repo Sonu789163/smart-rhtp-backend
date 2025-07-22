@@ -64,7 +64,8 @@ exports.summaryController = {
             if (!response) {
                 throw new Error('Data is empty');
             }
-            const summary = new Summary_1.Summary({ ...req.body });
+            console.log(response);
+            const summary = new Summary_1.Summary({ response });
             await summary.save();
             res.status(201).json(summary);
         }
