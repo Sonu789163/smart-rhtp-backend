@@ -12,7 +12,7 @@ const summarySchema = new mongoose_1.default.Schema({
     updatedAt: { type: Date, default: Date.now },
     documentId: { type: String, required: true },
     microsoftId: { type: String },
-    userId: { type: String, required: true },
+    userId: { type: String },
     pdfFileId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: "uploads.files" },
     metadata: {
         pageCount: Number,
