@@ -72,6 +72,7 @@ exports.summaryController = {
             res.status(201).json(summary);
         }
         catch (error) {
+            console.error("Error creating summary:", error);
             res.status(500).json({ error: "Failed to create summary" });
         }
     },
