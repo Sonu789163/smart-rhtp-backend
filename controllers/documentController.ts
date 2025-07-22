@@ -14,7 +14,7 @@ interface AuthRequest extends Request {
 export const documentController = {
   async getAll(req: AuthRequest, res: Response) {
     try {
-      const query: any = {};
+      const query: any = { type: "DRHP" };
       if (req.user.microsoftId) {
         query.microsoftId = req.user.microsoftId;
       } else if (req.user._id) {
@@ -109,14 +109,36 @@ export const documentController = {
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
-      // Delete file from GridFS
+
+      // Find and delete the related document (RHP or DRHP)
+      let relatedDocument = null;
+      if (document.relatedDrhpId) {
+        relatedDocument = await Document.findById(document.relatedDrhpId);
+      } else if (document.relatedRhpId) {
+        relatedDocument = await Document.findById(document.relatedRhpId);
+      }
+
+      // Delete files from GridFS for both documents
+      const conn = mongoose.connection;
+      const bucket = new GridFSBucket(conn.db, { bucketName: "uploads" });
+
       if (document.fileId) {
-        const conn = mongoose.connection;
-        const bucket = new GridFSBucket(conn.db, { bucketName: "uploads" });
         await bucket.delete(document.fileId);
       }
+      if (relatedDocument && relatedDocument.fileId) {
+        await bucket.delete(relatedDocument.fileId);
+      }
+
+      // Delete both documents
       await document.deleteOne();
-      res.json({ message: "Document deleted successfully" });
+      if (relatedDocument) {
+        await relatedDocument.deleteOne();
+      }
+
+      res.json({
+        message: "Document and related document deleted successfully",
+        deletedDocuments: relatedDocument ? 2 : 1,
+      });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete document" });
     }
@@ -136,6 +158,7 @@ export const documentController = {
         name: originalname,
         fileId: fileId,
         namespace: req.body.namespace || originalname,
+        type: "DRHP", // Set type for DRHP documents
       };
       if (user?.microsoftId) {
         docData.microsoftId = user.microsoftId;
@@ -262,6 +285,76 @@ export const documentController = {
         message: "Failed to process upload status update",
         error: err instanceof Error ? err.message : err,
       });
+    }
+  },
+
+  async uploadRhp(req: Request, res: Response) {
+    try {
+      const { drhpId } = req.body;
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+      if (!drhpId) return res.status(400).json({ error: "Missing DRHP ID" });
+
+      const drhp = await Document.findById(drhpId);
+      if (!drhp) return res.status(404).json({ error: "DRHP not found" });
+
+      const fileId = (req.file as any).id;
+      const user = (req as any).user;
+
+      // Create RHP namespace by appending "-rhp" to the DRHP namespace
+      const rhpNamespace = req.file.originalname;
+
+      const rhpDoc = new Document({
+        id: fileId.toString(),
+        fileId: fileId,
+        name: drhp.name,
+        namespace: drhp.namespace, // Keep original namespace for reference
+        rhpNamespace: rhpNamespace, // Store RHP-specific namespace
+        microsoftId: user?.microsoftId,
+        userId: user?._id?.toString(),
+        type: "RHP",
+        relatedDrhpId: drhp.id,
+      });
+      await rhpDoc.save();
+
+      drhp.relatedRhpId = rhpDoc.id;
+      await drhp.save();
+
+      // Send to n8n with RHP namespace
+      const n8nWebhookUrl =
+        "https://n8n-excollo.azurewebsites.net/webhook/upload-rhp";
+      const conn = mongoose.connection;
+      const bucket = new GridFSBucket(conn.db, { bucketName: "uploads" });
+
+      const form = new FormData();
+      form.append("file", bucket.openDownloadStream(rhpDoc.fileId), {
+        filename: rhpDoc.name,
+        contentType: "application/pdf",
+      });
+      form.append("documentId", rhpDoc.id);
+      form.append("namespace", rhpNamespace); // Use RHP namespace for n8n
+      form.append("name", drhp.name);
+      form.append("userId", rhpDoc.userId || rhpDoc.microsoftId);
+
+      try {
+        await axios.post(n8nWebhookUrl, form, {
+          headers: form.getHeaders(),
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+        });
+      } catch (n8nErr) {
+        console.error("Failed to send file to n8n:", n8nErr);
+      }
+
+      // Emit upload status (processing)
+      const jobId = rhpDoc.id;
+      io.emit("upload_status", { jobId, status: "processing" });
+
+      res
+        .status(201)
+        .json({ message: "RHP uploaded and linked", document: rhpDoc });
+    } catch (error) {
+      console.error("Error uploading RHP:", error);
+      res.status(500).json({ error: "Failed to upload RHP" });
     }
   },
 };

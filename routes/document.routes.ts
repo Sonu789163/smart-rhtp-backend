@@ -46,7 +46,12 @@ router.post(
   documentController.uploadDocument
 );
 
-
+// Upload RHP document
+router.post(
+  "/upload-rhp",
+  upload.single("file"), // @ts-ignore
+  documentController.uploadRhp
+);
 
 // Download/view PDF document
 router.get("/download/:id", documentController.downloadDocument);

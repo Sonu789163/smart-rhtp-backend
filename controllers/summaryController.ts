@@ -60,79 +60,14 @@ export const summaryController = {
 
   async create(req: AuthRequest, res: Response) {
     try {
-      const { title, content, documentId, metadata } = req.body;
-      if (!title || !content || !documentId) {
-        return res.status(400).json({
-          message: "Missing required fields",
-          required: { title, content, documentId },
-        });
-      }
-      const user = req.user;
-      // Validate that the document belongs to the user
-      const documentQuery: any = { id: documentId };
-      if (user.microsoftId) {
-        documentQuery.microsoftId = user.microsoftId;
-      } else if (user._id) {
-        documentQuery.userId = user._id.toString();
-      } else {
-        return res.status(400).json({ message: "No user identifier found" });
-      }
-      // Check if document exists and belongs to user
-      const document = await Document.findOne(documentQuery);
-      if (!document) {
-        return res
-          .status(404)
-          .json({ error: "Document not found or access denied" });
-      }
-      let pdfFileId = null;
-      // If metadata.url exists, download and store PDF in GridFS
-      if (metadata && metadata.url) {
-        try {
-          const bucket = getGridFSBucket();
-          const response = await axios.get(metadata.url, {
-            responseType: "stream",
-          });
-          const uploadStream = bucket.openUploadStream(`${title}.pdf`, {
-            contentType: "application/pdf",
-          });
-          await new Promise((resolve, reject) => {
-            response.data
-              .pipe(uploadStream)
-              .on("error", reject)
-              .on("finish", resolve);
-          });
-          pdfFileId = uploadStream.id;
-        } catch (err) {
-          console.error("Failed to download/upload PDF to GridFS:", err);
-        }
-      }
-      const summaryData: any = {
-        id: Date.now().toString(),
-        title,
-        content,
-        documentId,
-        updatedAt: new Date(),
-        metadata,
-        pdfFileId,
-      };
-      if (user.microsoftId) {
-        summaryData.microsoftId = user.microsoftId;
-      } else if (user._id) {
-        summaryData.userId = user._id.toString();
-      } else {
-        return res.status(400).json({ message: "No user identifier found" });
-      }
-      const summary = new Summary(summaryData);
+      // Delete any existing summary for this document
+      await Summary.deleteMany({ documentId: req.body.documentId });
+      // Now create the new summary
+      const summary = new Summary({ ...req.body });
       await summary.save();
       res.status(201).json(summary);
     } catch (error) {
-      console.error("Error creating summary:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error occurred";
-      res.status(500).json({
-        message: "Error creating summary",
-        error: errorMessage,
-      });
+      res.status(500).json({ error: "Failed to create summary" });
     }
   },
 

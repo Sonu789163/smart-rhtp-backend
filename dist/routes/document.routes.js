@@ -36,6 +36,9 @@ function (err, req, res, next) {
     }
     next(err);
 }, documentController_1.documentController.uploadDocument);
+// Upload RHP document
+router.post("/upload-rhp", upload.single("file"), // @ts-ignore
+documentController_1.documentController.uploadRhp);
 // Download/view PDF document
 router.get("/download/:id", documentController_1.documentController.downloadDocument);
 // Update document
