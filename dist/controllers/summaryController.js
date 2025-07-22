@@ -57,20 +57,23 @@ exports.summaryController = {
     },
     async create(req, res) {
         try {
-            // Delete any existing summary for this document
-            // await Summary.deleteMany({ documentId: req.body.documentId });
-            // Now create the new summary
             const response = req.body;
             if (!response) {
-                throw new Error('Data is empty');
+                throw new Error("Data is empty");
             }
-            console.log(response);
-            const summary = new Summary_1.Summary({ response });
+            // Delete any existing summaries for this document
+            await Summary_1.Summary.deleteMany({ documentId: response.documentId });
+            // Create the new summary
+            const summary = new Summary_1.Summary(response);
             await summary.save();
             res.status(201).json(summary);
         }
         catch (error) {
-            res.status(500).json({ error: "Failed to create summary" });
+            console.error("Error creating summary:", error);
+            res.status(500).json({
+                error: "Failed to create summary",
+                details: error,
+            });
         }
     },
     // New endpoint: Download PDF from GridFS by summary ID
