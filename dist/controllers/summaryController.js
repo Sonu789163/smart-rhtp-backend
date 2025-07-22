@@ -57,22 +57,14 @@ exports.summaryController = {
     },
     async create(req, res) {
         try {
-            // Check if any summaries exist for this document
-            const existingCount = await Summary_1.Summary.countDocuments({
-                documentId: req.body.documentId,
-            });
-            if (existingCount > 0) {
-                // If summaries exist, delete them
-                await Summary_1.Summary.deleteMany({ documentId: req.body.documentId });
-                console.log(`Deleted ${existingCount} existing summaries for documentId: ${req.body.documentId}`);
-            }
-            // Create the new summary
+            // Delete any existing summary for this document
+            // await Summary.deleteMany({ documentId: req.body.documentId });
+            // Now create the new summary
             const summary = new Summary_1.Summary({ ...req.body });
             await summary.save();
             res.status(201).json(summary);
         }
         catch (error) {
-            console.error("Error creating summary:", error);
             res.status(500).json({ error: "Failed to create summary" });
         }
     },
