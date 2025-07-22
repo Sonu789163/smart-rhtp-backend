@@ -13,6 +13,7 @@ const document_routes_1 = __importDefault(require("./routes/document.routes"));
 const chat_routes_1 = __importDefault(require("./routes/chat.routes"));
 const summary_routes_1 = __importDefault(require("./routes/summary.routes"));
 const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
+const report_routes_1 = __importDefault(require("./routes/report.routes"));
 const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
 dotenv_1.default.config();
@@ -55,6 +56,7 @@ app.use("/api/auth", auth_routes_1.default);
 app.use("/api/documents", document_routes_1.default);
 app.use("/api/chats", chat_routes_1.default);
 app.use("/api/summaries", summary_routes_1.default);
+app.use("/api/reports", report_routes_1.default);
 // Health check endpoint
 app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });
