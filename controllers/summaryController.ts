@@ -63,7 +63,13 @@ export const summaryController = {
       // Delete any existing summary for this document
       // await Summary.deleteMany({ documentId: req.body.documentId });
       // Now create the new summary
+      const response = req.body;
+      if(!response){
+        throw new Error('Data is empty');
+      }
       const summary = new Summary({ ...req.body });
+
+
       await summary.save();
       res.status(201).json(summary);
     } catch (error) {
