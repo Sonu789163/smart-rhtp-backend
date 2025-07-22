@@ -14,7 +14,7 @@ router.get("/", summaryController.getAll);
 router.get("/document/:documentId", summaryController.getByDocumentId);
 
 // Create new summary
-router.post("/", summaryController.create);
+router.post("/create", summaryController.create);
 
 // Update summary
 router.put("/:id", summaryController.update);
