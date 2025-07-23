@@ -113,13 +113,6 @@ exports.authController = {
             user.resetPasswordExpires = new Date(Date.now() + 3600000); // 1 hour
             await user.save();
             // Send email
-            console.log('Setting up nodemailer transport with:', {
-                host: process.env.SMTP_HOST,
-                port: Number(process.env.SMTP_PORT) || 587,
-                secure: false,
-                user: process.env.SMTP_USER,
-                // Not logging password for security reasons
-            });
             const transporter = nodemailer_1.default.createTransport({
                 host: process.env.SMTP_HOST,
                 port: Number(process.env.SMTP_PORT) || 587,
@@ -129,31 +122,13 @@ exports.authController = {
                     pass: process.env.SMTP_PASS,
                 },
             });
-            const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
-            console.log(`Attempting to send reset email to: ${email}`);
-            console.log(`Reset URL: ${resetUrl}`);
-            try {
-                console.log('Email configuration:', {
-                    to: email,
-                    from: process.env.SMTP_FROM || process.env.SMTP_USER,
-                    subject: "Password Reset Request"
-                });
-                const info = await transporter.sendMail({
-                    to: email,
-                    from: process.env.SMTP_FROM || process.env.SMTP_USER,
-                    subject: "Password Reset Request",
-                    html: `<p>You requested a password reset.</p><p>Click <a href="${resetUrl}">here</a> to reset your password. This link is valid for 1 hour.</p>`,
-                });
-                console.log('Email sent successfully:', info);
-                console.log('Email response:', info.response);
-                console.log('Message ID:', info.messageId);
-                console.log('Envelope:', JSON.stringify(info.envelope));
-            }
-            catch (emailError) {
-                console.error('Error sending email:', emailError);
-                console.error('Error details:', JSON.stringify(emailError, null, 2));
-                // Still return success to prevent email enumeration, but log the error
-            }
+            const resetUrl = `${process.env.FRONTEND_URL || "http://localhost:8080"}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
+            await transporter.sendMail({
+                to: email,
+                from: process.env.SMTP_FROM || process.env.SMTP_USER,
+                subject: "Password Reset Request",
+                html: `<p>You requested a password reset.</p><p>Click <a href="${resetUrl}">here</a> to reset your password. This link is valid for 1 hour.</p>`,
+            });
             return res.status(200).json({
                 message: "If that email is registered, a reset link has been sent.",
             });
