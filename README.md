@@ -87,6 +87,16 @@ REDIRECT_URI=https://smart-rhtp-backend-2.onrender.com/api/auth/callback
 FRONTEND_URL=https://rhp-document-summarizer.vercel.app/
 ```
 
+## Password Reset
+
+- `POST /api/auth/forgot-password` — Request a password reset (email/password users only)
+  - Body: `{ email: string }`
+  - Always returns success message for privacy.
+- `POST /api/auth/reset-password` — Reset password with token (email/password users only)
+  - Body: `{ email: string, token: string, password: string }`
+  - Returns success or error if token is invalid/expired.
+- **Microsoft users:** Please reset your password using your Microsoft account provider. This backend does not handle Microsoft password resets.
+
 ## License
 
 MIT

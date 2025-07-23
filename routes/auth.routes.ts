@@ -13,6 +13,8 @@ const router = express.Router();
 // --- Email/Password Routes ---
 router.post("/register", authController.register);
 router.post("/login", authController.login);
+router.post("/forgot-password", authController.forgotPassword);
+router.post("/reset-password", authController.resetPassword);
 router.post("/refresh-token", authController.refreshToken);
 router.post("/logout", authController.logout);
 
@@ -119,9 +121,7 @@ router.get("/callback", async (req, res) => {
     await user.save();
 
     // Redirect to frontend with both tokens
-    const frontendUrl =
-      process.env.FRONTEND_URL  ||
-      "http://localhost:8080";
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:8080";
     res.redirect(
       `${frontendUrl}/auth-callback?token=${token}&refreshToken=${refreshToken}`
     );
