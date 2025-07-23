@@ -8,7 +8,7 @@ const generateTokens = async (user: any) => {
   const accessToken = jwt.sign(
     { userId: user._id, email: user.email },
     process.env.JWT_SECRET!,
-    { expiresIn: "1h" }
+    { expiresIn: "1d" }
   );
   const refreshToken = jwt.sign(
     { userId: user._id, email: user.email },
@@ -88,7 +88,7 @@ export const authController = {
       const accessToken = jwt.sign(
         { userId: user._id, email: user.email },
         process.env.JWT_SECRET!,
-        { expiresIn: "1h" }
+        { expiresIn: "1d" }
       );
 
       res.json({ accessToken });
