@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { User } from "../models/User";
+import nodemailer from "nodemailer";
+import crypto from "crypto";
 
 // Helper to generate tokens
 const generateTokens = async (user: any) => {
@@ -115,6 +117,98 @@ export const authController = {
       res.status(200).json({ message: "Logged out successfully" });
     } catch (error) {
       res.status(400).json({ message: "Invalid refresh token" });
+    }
+  },
+
+  // Forgot Password
+  async forgotPassword(req: Request, res: Response) {
+    const { email } = req.body;
+    try {
+      const user = await User.findOne({ email });
+      if (!user || !user.password) {
+        // Don't reveal if user exists or not
+        return res.status(200).json({
+          message: "If that email is registered, a reset link has been sent.",
+        });
+      }
+      // Generate token
+      const token = crypto.randomBytes(32).toString("hex");
+      user.resetPasswordToken = token;
+      user.resetPasswordExpires = new Date(Date.now() + 3600000); // 1 hour
+      await user.save();
+
+      // Send email
+      console.log('Setting up nodemailer transport with:', {
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT) || 587,
+        secure: false,
+        user: process.env.SMTP_USER,
+        // Not logging password for security reasons
+      });
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT) || 587,
+        secure: false,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+      const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
+      console.log(`Attempting to send reset email to: ${email}`);
+      console.log(`Reset URL: ${resetUrl}`);
+      try {
+        console.log('Email configuration:', {
+          to: email,
+          from: process.env.SMTP_FROM || process.env.SMTP_USER,
+          subject: "Password Reset Request"
+        });
+        
+        const info = await transporter.sendMail({
+          to: email,
+          from: process.env.SMTP_FROM || process.env.SMTP_USER,
+          subject: "Password Reset Request",
+          html: `<p>You requested a password reset.</p><p>Click <a href="${resetUrl}">here</a> to reset your password. This link is valid for 1 hour.</p>`,
+        });
+        
+        console.log('Email sent successfully:', info);
+        console.log('Email response:', info.response);
+        console.log('Message ID:', info.messageId);
+        console.log('Envelope:', JSON.stringify(info.envelope));
+      } catch (emailError) {
+        console.error('Error sending email:', emailError);
+        console.error('Error details:', JSON.stringify(emailError, null, 2));
+        // Still return success to prevent email enumeration, but log the error
+      }
+      return res.status(200).json({
+        message: "If that email is registered, a reset link has been sent.",
+      });
+    } catch (error) {
+      console.error("Forgot password error:", error);
+      res.status(500).json({ message: "Server error" });
+    }
+  },
+
+  // Reset Password
+  async resetPassword(req: Request, res: Response) {
+    const { email, token, password } = req.body;
+    try {
+      const user = await User.findOne({
+        email,
+        resetPasswordToken: token,
+        resetPasswordExpires: { $gt: Date.now() },
+      });
+      if (!user || !user.password) {
+        return res.status(400).json({ message: "Invalid or expired token" });
+      }
+      user.password = await bcrypt.hash(password, 10);
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpires = undefined;
+      await user.save();
+      res.status(200).json({ message: "Password has been reset successfully" });
+    } catch (error) {
+      console.error("Reset password error:", error);
+      res.status(500).json({ message: "Server error" });
     }
   },
 };

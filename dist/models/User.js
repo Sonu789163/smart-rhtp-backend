@@ -13,5 +13,7 @@ const userSchema = new mongoose_1.default.Schema({
     refreshTokens: { type: [{ type: String }], default: [] }, // To store active refresh tokens
     createdAt: { type: Date, default: Date.now },
     lastLogin: { type: Date, default: Date.now },
+    resetPasswordToken: { type: String },
+    resetPasswordExpires: { type: Date },
 });
 exports.User = mongoose_1.default.model("User", userSchema);

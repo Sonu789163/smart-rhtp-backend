@@ -15,6 +15,8 @@ const router = express_1.default.Router();
 // --- Email/Password Routes ---
 router.post("/register", authController_1.authController.register);
 router.post("/login", authController_1.authController.login);
+router.post("/forgot-password", authController_1.authController.forgotPassword);
+router.post("/reset-password", authController_1.authController.resetPassword);
 router.post("/refresh-token", authController_1.authController.refreshToken);
 router.post("/logout", authController_1.authController.logout);
 // Microsoft OAuth login
@@ -95,8 +97,7 @@ router.get("/callback", async (req, res) => {
         user.refreshTokens.push(refreshToken);
         await user.save();
         // Redirect to frontend with both tokens
-        const frontendUrl = process.env.FRONTEND_URL ||
-            "http://localhost:8080";
+        const frontendUrl = process.env.FRONTEND_URL || "http://localhost:8080";
         res.redirect(`${frontendUrl}/auth-callback?token=${token}&refreshToken=${refreshToken}`);
     }
     catch (error) {
