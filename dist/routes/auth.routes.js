@@ -96,8 +96,7 @@ router.get("/callback", async (req, res) => {
         await user.save();
         // Redirect to frontend with both tokens
         const frontendUrl = process.env.FRONTEND_URL ||
-            "https://smart-rhp-pilot-vru8.vercel.app/" ||
-            "http://localhost:5173";
+            "http://localhost:8080";
         res.redirect(`${frontendUrl}/auth-callback?token=${token}&refreshToken=${refreshToken}`);
     }
     catch (error) {
