@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.summaryController = void 0;
 const Summary_1 = require("../models/Summary");
+const axios_1 = __importDefault(require("axios"));
 const r2_1 = require("../config/r2");
 const client_s3_1 = require("@aws-sdk/client-s3");
 const promises_1 = require("fs/promises");
@@ -64,8 +65,31 @@ exports.summaryController = {
             }
             // Delete any existing summaries for this document
             await Summary_1.Summary.deleteMany({ documentId: response.documentId });
-            // Create the new summary
-            const summary = new Summary_1.Summary(response);
+            let pdfFileKey = null;
+            if (response.metadata && response.metadata.url) {
+                try {
+                    const axiosResponse = await axios_1.default.get(response.metadata.url, {
+                        responseType: "stream",
+                    });
+                    const s3Key = `${Date.now()}-${(response.title || "summary").replace(/\s+/g, "_")}.pdf`;
+                    await r2_1.r2Client.send(new client_s3_1.PutObjectCommand({
+                        Bucket: r2_1.R2_BUCKET,
+                        Key: s3Key,
+                        Body: axiosResponse.data,
+                        ContentType: "application/pdf",
+                    }));
+                    pdfFileKey = s3Key;
+                }
+                catch (err) {
+                    console.error("Failed to download/upload PDF to S3:", err);
+                    return res
+                        .status(500)
+                        .json({ error: "Failed to upload PDF to Cloudflare R2" });
+                }
+            }
+            // Add pdfFileKey to the summary document
+            const summaryData = { ...response, pdfFileKey };
+            const summary = new Summary_1.Summary(summaryData);
             await summary.save();
             res.status(201).json(summary);
         }

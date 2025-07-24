@@ -114,6 +114,9 @@ export const reportController = {
           pdfFileKey = s3Key;
         } catch (err) {
           console.error("Failed to download/upload PDF to S3:", err);
+          return res
+            .status(500)
+            .json({ error: "Failed to upload PDF to Cloudflare R2" });
         }
       }
 
