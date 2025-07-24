@@ -16,7 +16,7 @@ const reportSchema = new mongoose_1.default.Schema({
     rhpNamespace: { type: String, required: true },
     microsoftId: { type: String },
     userId: { type: String },
-    pdfFileId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: "uploads.files" },
+    pdfFileKey: { type: String },
     metadata: {
         pageCount: Number,
         url: String,

@@ -7,14 +7,25 @@ const express_1 = __importDefault(require("express"));
 const documentController_1 = require("../controllers/documentController");
 const auth_1 = require("../middleware/auth");
 const multer_1 = __importDefault(require("multer"));
-const gridfs_1 = require("../config/gridfs");
+const r2_1 = require("../config/r2");
+const multer_s3_1 = __importDefault(require("multer-s3"));
 const router = express_1.default.Router();
 // POST /upload-status/update (for n8n to notify upload status)
 router.post("/upload-status/update", documentController_1.documentController.uploadStatusUpdate);
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
 const upload = (0, multer_1.default)({
-    storage: gridfs_1.storage,
+    storage: (0, multer_s3_1.default)({
+        s3: r2_1.r2Client,
+        bucket: r2_1.R2_BUCKET,
+        contentType: multer_s3_1.default.AUTO_CONTENT_TYPE,
+        key: function (req, file, cb) {
+            // Use a unique key for each file, e.g., timestamp + original name
+            const uniqueKey = `${Date.now()}-${file.originalname}`;
+            cb(null, uniqueKey);
+        },
+        acl: "private", // or 'public-read' if you want public access
+    }),
     limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
 });
 // Get all documents for current user

@@ -6,6 +6,8 @@ import { GridFSBucket } from "mongodb";
 import axios from "axios";
 import FormData from "form-data";
 import { io } from "../index";
+import { r2Client, R2_BUCKET } from "../config/r2";
+import { GetObjectCommand } from "@aws-sdk/client-s3";
 
 interface AuthRequest extends Request {
   user?: any;
@@ -118,15 +120,23 @@ export const documentController = {
         relatedDocument = await Document.findById(document.relatedRhpId);
       }
 
-      // Delete files from GridFS for both documents
-      const conn = mongoose.connection;
-      const bucket = new GridFSBucket(conn.db, { bucketName: "uploads" });
-
-      if (document.fileId) {
-        await bucket.delete(document.fileId);
+      // Delete files from S3 for both documents
+      const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+      if (document.fileKey) {
+        await r2Client.send(
+          new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: document.fileKey,
+          })
+        );
       }
-      if (relatedDocument && relatedDocument.fileId) {
-        await bucket.delete(relatedDocument.fileId);
+      if (relatedDocument && relatedDocument.fileKey) {
+        await r2Client.send(
+          new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: relatedDocument.fileKey,
+          })
+        );
       }
 
       // Delete both documents
@@ -150,13 +160,13 @@ export const documentController = {
         return res.status(400).json({ error: "No file uploaded" });
       }
       const originalname = req.file.originalname;
-      const fileId = (req.file as any).id;
+      const fileKey = (req.file as any).key;
       const user = (req as any).user;
       // Use namespace from frontend if present, else fallback to originalname
       const docData: any = {
-        id: fileId.toString(),
+        id: fileKey,
         name: originalname,
-        fileId: fileId,
+        fileKey: fileKey,
         namespace: req.body.namespace || originalname,
         type: "DRHP", // Set type for DRHP documents
       };
@@ -173,11 +183,15 @@ export const documentController = {
       // Notify n8n for further processing
       const n8nWebhookUrl =
         "https://n8n-excollo.azurewebsites.net/webhook/bfda1ff3-99be-4f6e-995f-7728ca5b2f6a";
-      const conn = mongoose.connection;
-      const bucket = new GridFSBucket(conn.db, { bucketName: "uploads" });
 
+      // Download file from S3 and send to n8n
+      const getObjectCommand = new GetObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: fileKey,
+      });
+      const s3Response = await r2Client.send(getObjectCommand);
       const form = new FormData();
-      form.append("file", bucket.openDownloadStream(document.fileId), {
+      form.append("file", s3Response.Body as any, {
         filename: document.name,
         contentType: "application/pdf",
       });
@@ -207,19 +221,25 @@ export const documentController = {
   async downloadDocument(req: Request, res: Response) {
     try {
       const document = await Document.findOne({ id: req.params.id });
-      if (!document || !document.fileId) {
+      if (!document || !document.fileKey) {
         return res.status(404).json({ error: "Document not found or no file" });
       }
-      const conn = mongoose.connection;
-      const bucket = new GridFSBucket(conn.db, { bucketName: "uploads" });
       res.set({
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename=\"${document.name}\"`,
       });
-      const downloadStream = bucket.openDownloadStream(document.fileId);
-      downloadStream.pipe(res).on("error", () => {
-        res.status(500).json({ error: "Error downloading file" });
+      const getObjectCommand = new GetObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: document.fileKey,
       });
+      const s3Response = await r2Client.send(getObjectCommand);
+      if (s3Response.Body) {
+        (s3Response.Body as any).pipe(res).on("error", () => {
+          res.status(500).json({ error: "Error downloading file" });
+        });
+      } else {
+        res.status(500).json({ error: "File stream not available" });
+      }
     } catch (error) {
       res.status(500).json({ error: "Failed to download document" });
     }
@@ -297,15 +317,15 @@ export const documentController = {
       const drhp = await Document.findById(drhpId);
       if (!drhp) return res.status(404).json({ error: "DRHP not found" });
 
-      const fileId = (req.file as any).id;
+      const fileKey = (req.file as any).key;
       const user = (req as any).user;
 
       // Create RHP namespace by appending "-rhp" to the DRHP namespace
       const rhpNamespace = req.file.originalname;
 
       const rhpDoc = new Document({
-        id: fileId.toString(),
-        fileId: fileId,
+        id: fileKey,
+        fileKey: fileKey,
         name: drhp.name,
         namespace: drhp.namespace, // Keep original namespace for reference
         rhpNamespace: rhpNamespace, // Store RHP-specific namespace
@@ -322,11 +342,15 @@ export const documentController = {
       // Send to n8n with RHP namespace
       const n8nWebhookUrl =
         "https://n8n-excollo.azurewebsites.net/webhook/upload-rhp";
-      const conn = mongoose.connection;
-      const bucket = new GridFSBucket(conn.db, { bucketName: "uploads" });
 
+      // Download file from S3 and send to n8n
+      const getObjectCommand = new GetObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: fileKey,
+      });
+      const s3Response = await r2Client.send(getObjectCommand);
       const form = new FormData();
-      form.append("file", bucket.openDownloadStream(rhpDoc.fileId), {
+      form.append("file", s3Response.Body as any, {
         filename: rhpDoc.name,
         contentType: "application/pdf",
       });

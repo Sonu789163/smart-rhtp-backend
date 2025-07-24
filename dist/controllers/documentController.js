@@ -1,15 +1,48 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.documentController = void 0;
 const Document_1 = require("../models/Document");
-const mongoose_1 = __importDefault(require("mongoose"));
-const mongodb_1 = require("mongodb");
 const axios_1 = __importDefault(require("axios"));
 const form_data_1 = __importDefault(require("form-data"));
 const index_1 = require("../index");
+const r2_1 = require("../config/r2");
+const client_s3_1 = require("@aws-sdk/client-s3");
 exports.documentController = {
     async getAll(req, res) {
         try {
@@ -126,14 +159,19 @@ exports.documentController = {
             else if (document.relatedRhpId) {
                 relatedDocument = await Document_1.Document.findById(document.relatedRhpId);
             }
-            // Delete files from GridFS for both documents
-            const conn = mongoose_1.default.connection;
-            const bucket = new mongodb_1.GridFSBucket(conn.db, { bucketName: "uploads" });
-            if (document.fileId) {
-                await bucket.delete(document.fileId);
+            // Delete files from S3 for both documents
+            const { DeleteObjectCommand } = await Promise.resolve().then(() => __importStar(require("@aws-sdk/client-s3")));
+            if (document.fileKey) {
+                await r2_1.r2Client.send(new DeleteObjectCommand({
+                    Bucket: r2_1.R2_BUCKET,
+                    Key: document.fileKey,
+                }));
             }
-            if (relatedDocument && relatedDocument.fileId) {
-                await bucket.delete(relatedDocument.fileId);
+            if (relatedDocument && relatedDocument.fileKey) {
+                await r2_1.r2Client.send(new DeleteObjectCommand({
+                    Bucket: r2_1.R2_BUCKET,
+                    Key: relatedDocument.fileKey,
+                }));
             }
             // Delete both documents
             await document.deleteOne();
@@ -155,13 +193,13 @@ exports.documentController = {
                 return res.status(400).json({ error: "No file uploaded" });
             }
             const originalname = req.file.originalname;
-            const fileId = req.file.id;
+            const fileKey = req.file.key;
             const user = req.user;
             // Use namespace from frontend if present, else fallback to originalname
             const docData = {
-                id: fileId.toString(),
+                id: fileKey,
                 name: originalname,
-                fileId: fileId,
+                fileKey: fileKey,
                 namespace: req.body.namespace || originalname,
                 type: "DRHP", // Set type for DRHP documents
             };
@@ -178,10 +216,14 @@ exports.documentController = {
             await document.save();
             // Notify n8n for further processing
             const n8nWebhookUrl = "https://n8n-excollo.azurewebsites.net/webhook/bfda1ff3-99be-4f6e-995f-7728ca5b2f6a";
-            const conn = mongoose_1.default.connection;
-            const bucket = new mongodb_1.GridFSBucket(conn.db, { bucketName: "uploads" });
+            // Download file from S3 and send to n8n
+            const getObjectCommand = new client_s3_1.GetObjectCommand({
+                Bucket: r2_1.R2_BUCKET,
+                Key: fileKey,
+            });
+            const s3Response = await r2_1.r2Client.send(getObjectCommand);
             const form = new form_data_1.default();
-            form.append("file", bucket.openDownloadStream(document.fileId), {
+            form.append("file", s3Response.Body, {
                 filename: document.name,
                 contentType: "application/pdf",
             });
@@ -210,19 +252,26 @@ exports.documentController = {
     async downloadDocument(req, res) {
         try {
             const document = await Document_1.Document.findOne({ id: req.params.id });
-            if (!document || !document.fileId) {
+            if (!document || !document.fileKey) {
                 return res.status(404).json({ error: "Document not found or no file" });
             }
-            const conn = mongoose_1.default.connection;
-            const bucket = new mongodb_1.GridFSBucket(conn.db, { bucketName: "uploads" });
             res.set({
                 "Content-Type": "application/pdf",
                 "Content-Disposition": `attachment; filename=\"${document.name}\"`,
             });
-            const downloadStream = bucket.openDownloadStream(document.fileId);
-            downloadStream.pipe(res).on("error", () => {
-                res.status(500).json({ error: "Error downloading file" });
+            const getObjectCommand = new client_s3_1.GetObjectCommand({
+                Bucket: r2_1.R2_BUCKET,
+                Key: document.fileKey,
             });
+            const s3Response = await r2_1.r2Client.send(getObjectCommand);
+            if (s3Response.Body) {
+                s3Response.Body.pipe(res).on("error", () => {
+                    res.status(500).json({ error: "Error downloading file" });
+                });
+            }
+            else {
+                res.status(500).json({ error: "File stream not available" });
+            }
         }
         catch (error) {
             res.status(500).json({ error: "Failed to download document" });
@@ -302,13 +351,13 @@ exports.documentController = {
             const drhp = await Document_1.Document.findById(drhpId);
             if (!drhp)
                 return res.status(404).json({ error: "DRHP not found" });
-            const fileId = req.file.id;
+            const fileKey = req.file.key;
             const user = req.user;
             // Create RHP namespace by appending "-rhp" to the DRHP namespace
             const rhpNamespace = req.file.originalname;
             const rhpDoc = new Document_1.Document({
-                id: fileId.toString(),
-                fileId: fileId,
+                id: fileKey,
+                fileKey: fileKey,
                 name: drhp.name,
                 namespace: drhp.namespace, // Keep original namespace for reference
                 rhpNamespace: rhpNamespace, // Store RHP-specific namespace
@@ -322,10 +371,14 @@ exports.documentController = {
             await drhp.save();
             // Send to n8n with RHP namespace
             const n8nWebhookUrl = "https://n8n-excollo.azurewebsites.net/webhook/upload-rhp";
-            const conn = mongoose_1.default.connection;
-            const bucket = new mongodb_1.GridFSBucket(conn.db, { bucketName: "uploads" });
+            // Download file from S3 and send to n8n
+            const getObjectCommand = new client_s3_1.GetObjectCommand({
+                Bucket: r2_1.R2_BUCKET,
+                Key: fileKey,
+            });
+            const s3Response = await r2_1.r2Client.send(getObjectCommand);
             const form = new form_data_1.default();
-            form.append("file", bucket.openDownloadStream(rhpDoc.fileId), {
+            form.append("file", s3Response.Body, {
                 filename: rhpDoc.name,
                 contentType: "application/pdf",
             });

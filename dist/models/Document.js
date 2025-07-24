@@ -14,7 +14,7 @@ const documentSchema = new mongoose_1.default.Schema({
     status: { type: String, default: "completed" },
     microsoftId: { type: String },
     userId: { type: String },
-    fileId: { type: mongoose_1.default.Schema.Types.ObjectId, required: true },
+    fileKey: { type: String, required: true },
     type: { type: String, enum: ["DRHP", "RHP"], required: true }, // distinguish between DRHP and RHP
     relatedDrhpId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: "Document" }, // for RHP to link to DRHP
     relatedRhpId: { type: mongoose_1.default.Schema.Types.ObjectId, ref: "Document" }, // for DRHP to link to RHP
