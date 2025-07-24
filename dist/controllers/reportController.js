@@ -82,7 +82,7 @@ exports.reportController = {
             }
             const user = req.user;
             let pdfFileKey = null;
-            if (metadata && metadata.url) {
+            if (metadata.url) {
                 try {
                     // Download the PDF from the URL and upload to S3
                     const response = await axios_1.default.get(metadata.url, {
