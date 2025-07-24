@@ -5,7 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.summaryController = void 0;
 const Summary_1 = require("../models/Summary");
-const gridfs_1 = require("../config/gridfs");
+const r2_1 = require("../config/r2");
+const client_s3_1 = require("@aws-sdk/client-s3");
 const promises_1 = require("fs/promises");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
@@ -80,18 +81,34 @@ exports.summaryController = {
     async downloadPdf(req, res) {
         try {
             const { id } = req.params;
-            const summary = await Summary_1.Summary.findOne({ id });
-            if (!summary || !summary.pdfFileId) {
+            const { documentId } = req.query; // Accept documentId as a query parameter for extra safety
+            let summary;
+            if (documentId) {
+                summary = (await Summary_1.Summary.findOne({ id, documentId }).lean());
+            }
+            else {
+                summary = (await Summary_1.Summary.findOne({ id }).lean());
+            }
+            if (!summary || !summary.pdfFileKey) {
                 return res
                     .status(404)
                     .json({ error: "PDF not found for this summary" });
             }
-            const bucket = (0, gridfs_1.getGridFSBucket)();
             res.set("Content-Type", "application/pdf");
-            bucket.openDownloadStream(summary.pdfFileId).pipe(res);
+            const getObjectCommand = new client_s3_1.GetObjectCommand({
+                Bucket: r2_1.R2_BUCKET,
+                Key: summary.pdfFileKey,
+            });
+            const s3Response = await r2_1.r2Client.send(getObjectCommand);
+            if (s3Response.Body) {
+                s3Response.Body.pipe(res);
+            }
+            else {
+                res.status(500).json({ error: "File stream not available" });
+            }
         }
         catch (error) {
-            console.error("Error downloading PDF from GridFS:", error);
+            console.error("Error downloading PDF from S3:", error);
             res.status(500).json({ error: "Failed to download PDF" });
         }
     },
@@ -167,9 +184,12 @@ exports.summaryController = {
             else {
                 return res.status(400).json({ error: "No user identifier found" });
             }
-            const summary = await Summary_1.Summary.findOneAndDelete(query);
-            if (!summary) {
-                return res.status(404).json({ message: "Summary not found" });
+            const summary = await Summary_1.Summary.findOneAndDelete(query).lean();
+            if (summary && summary.pdfFileKey) {
+                await r2_1.r2Client.send(new client_s3_1.DeleteObjectCommand({
+                    Bucket: r2_1.R2_BUCKET,
+                    Key: summary.pdfFileKey,
+                }));
             }
             res.json({ message: "Summary deleted successfully" });
         }

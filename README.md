@@ -5,7 +5,7 @@ This is the backend for the Smart DRHP Document Assistant platform. It provides 
 ## Features
 
 - User authentication (email/password & Microsoft OAuth)
-- Upload, download, and manage PDF documents (stored in MongoDB GridFS)
+- Upload, download, and manage PDF documents (stored in Cloudflare R2, S3-compatible)
 - Generate and manage AI-powered document summaries
 - Chat with your documents to extract insights
 - User-specific data isolation and security
@@ -53,17 +53,19 @@ This is the backend for the Smart DRHP Document Assistant platform. It provides 
 ## Data Models
 
 - **User**: Microsoft or email/password, with refresh tokens
-- **Document**: PDF file, metadata, user association
+- **Document**: PDF file (stored in Cloudflare R2), metadata, user association
 - **Summary**: AI-generated summary, linked to document and user
 - **Chat**: Conversation history, linked to document and user
 
 ## Tech Stack
 
 - Node.js, Express, TypeScript
-- MongoDB & GridFS
+- MongoDB
+- Cloudflare R2 (S3-compatible object storage) for file storage
 - Passport.js (Microsoft OAuth)
 - JWT authentication
-- Multer (file uploads)
+- Multer (file uploads, via multer-s3)
+- AWS SDK v3 for S3
 - Axios, FormData
 
 ## Setup
@@ -85,6 +87,12 @@ CLIENT_ID=your_microsoft_client_id
 CLIENT_SECRET=your_microsoft_client_secret
 REDIRECT_URI=https://smart-rhtp-backend-2.onrender.com/api/auth/callback
 FRONTEND_URL=https://rhp-document-summarizer.vercel.app/
+
+# Cloudflare R2 (S3-compatible) configuration
+R2_ACCESS_KEY_ID=your_r2_access_key_id
+R2_SECRET_ACCESS_KEY=your_r2_secret_access_key
+R2_BUCKET_NAME=your_r2_bucket_name
+CLOUDFLARE_URI=https://<accountid>.<region>.r2.cloudflarestorage.com
 ```
 
 ## Password Reset

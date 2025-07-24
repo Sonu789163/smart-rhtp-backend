@@ -3,7 +3,8 @@ import { documentController } from "../controllers/documentController";
 import { authMiddleware } from "../middleware/auth";
 import multer from "multer";
 import { Request, Response, NextFunction } from "express";
-import { storage } from "../config/gridfs";
+import { r2Client, R2_BUCKET } from "../config/r2";
+import multerS3 from "multer-s3";
 
 const router = express.Router();
 
@@ -14,7 +15,21 @@ router.post("/upload-status/update", documentController.uploadStatusUpdate);
 router.use(authMiddleware);
 
 const upload = multer({
-  storage,
+  storage: multerS3({
+    s3: r2Client,
+    bucket: R2_BUCKET,
+    contentType: multerS3.AUTO_CONTENT_TYPE,
+    key: function (
+      req: Request,
+      file: Express.Multer.File,
+      cb: (error: Error | null, key?: string) => void
+    ) {
+      // Use a unique key for each file, e.g., timestamp + original name
+      const uniqueKey = `${Date.now()}-${file.originalname}`;
+      cb(null, uniqueKey);
+    },
+    acl: "private", // or 'public-read' if you want public access
+  }),
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
 });
 

@@ -7,7 +7,8 @@ exports.reportController = void 0;
 const Report_1 = require("../models/Report");
 const axios_1 = __importDefault(require("axios"));
 const index_1 = require("../index");
-const gridfs_1 = require("../config/gridfs");
+const r2_1 = require("../config/r2");
+const client_s3_1 = require("@aws-sdk/client-s3");
 const promises_1 = require("fs/promises");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
@@ -80,26 +81,24 @@ exports.reportController = {
                 });
             }
             const user = req.user;
-            let pdfFileId = null;
+            let pdfFileKey = null;
             if (metadata && metadata.url) {
                 try {
-                    const bucket = (0, gridfs_1.getGridFSBucket)();
+                    // Download the PDF from the URL and upload to S3
                     const response = await axios_1.default.get(metadata.url, {
                         responseType: "stream",
                     });
-                    const uploadStream = bucket.openUploadStream(`${title}.pdf`, {
-                        contentType: "application/pdf",
-                    });
-                    await new Promise((resolve, reject) => {
-                        response.data
-                            .pipe(uploadStream)
-                            .on("error", reject)
-                            .on("finish", resolve);
-                    });
-                    pdfFileId = uploadStream.id;
+                    const s3Key = `${Date.now()}-${title.replace(/\s+/g, "_")}.pdf`;
+                    await r2_1.r2Client.send(new client_s3_1.PutObjectCommand({
+                        Bucket: r2_1.R2_BUCKET,
+                        Key: s3Key,
+                        Body: response.data,
+                        ContentType: "application/pdf",
+                    }));
+                    pdfFileKey = s3Key;
                 }
                 catch (err) {
-                    console.error("Failed to download/upload PDF to GridFS:", err);
+                    console.error("Failed to download/upload PDF to S3:", err);
                 }
             }
             const reportData = {
@@ -112,7 +111,7 @@ exports.reportController = {
                 rhpNamespace,
                 updatedAt: new Date(),
                 metadata,
-                pdfFileId,
+                pdfFileKey,
             };
             if (user.microsoftId) {
                 reportData.microsoftId = user.microsoftId;
@@ -158,15 +157,24 @@ exports.reportController = {
         try {
             const { id } = req.params;
             const report = await Report_1.Report.findOne({ id });
-            if (!report || !report.pdfFileId) {
+            if (!report || !report.pdfFileKey) {
                 return res.status(404).json({ error: "PDF not found for this report" });
             }
-            const bucket = (0, gridfs_1.getGridFSBucket)();
             res.set("Content-Type", "application/pdf");
-            bucket.openDownloadStream(report.pdfFileId).pipe(res);
+            const getObjectCommand = new client_s3_1.GetObjectCommand({
+                Bucket: r2_1.R2_BUCKET,
+                Key: report.pdfFileKey,
+            });
+            const s3Response = await r2_1.r2Client.send(getObjectCommand);
+            if (s3Response.Body) {
+                s3Response.Body.pipe(res);
+            }
+            else {
+                res.status(500).json({ error: "File stream not available" });
+            }
         }
         catch (error) {
-            console.error("Error downloading PDF from GridFS:", error);
+            console.error("Error downloading PDF from S3:", error);
             res.status(500).json({ error: "Failed to download PDF" });
         }
     },
@@ -241,10 +249,12 @@ exports.reportController = {
             if (!report) {
                 return res.status(404).json({ error: "Report not found" });
             }
-            // Delete PDF file from GridFS
-            if (report.pdfFileId) {
-                const bucket = (0, gridfs_1.getGridFSBucket)();
-                await bucket.delete(report.pdfFileId);
+            // Delete PDF file from S3
+            if (report.pdfFileKey) {
+                await r2_1.r2Client.send(new client_s3_1.DeleteObjectCommand({
+                    Bucket: r2_1.R2_BUCKET,
+                    Key: report.pdfFileKey,
+                }));
             }
             await report.deleteOne();
             res.json({ message: "Report deleted successfully" });

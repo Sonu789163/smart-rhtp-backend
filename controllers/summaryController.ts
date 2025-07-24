@@ -4,7 +4,8 @@ import { Summary } from "../models/Summary";
 import { Document } from "../models/Document";
 import axios from "axios";
 import mongoose from "mongoose";
-import { getGridFSBucket } from "../config/gridfs";
+import { r2Client, R2_BUCKET } from "../config/r2";
+import { GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import htmlDocx from "html-docx-js";
 import mammoth from "mammoth";
 import { writeFile, unlink } from "fs/promises";
@@ -86,17 +87,31 @@ export const summaryController = {
   async downloadPdf(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const summary = await Summary.findOne({ id });
-      if (!summary || !summary.pdfFileId) {
+      const { documentId } = req.query; // Accept documentId as a query parameter for extra safety
+      let summary: any;
+      if (documentId) {
+        summary = (await Summary.findOne({ id, documentId }).lean()) as any;
+      } else {
+        summary = (await Summary.findOne({ id }).lean()) as any;
+      }
+      if (!summary || !(summary as any).pdfFileKey) {
         return res
           .status(404)
           .json({ error: "PDF not found for this summary" });
       }
-      const bucket = getGridFSBucket();
       res.set("Content-Type", "application/pdf");
-      bucket.openDownloadStream(summary.pdfFileId).pipe(res);
+      const getObjectCommand = new GetObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: (summary as any).pdfFileKey,
+      });
+      const s3Response = await r2Client.send(getObjectCommand);
+      if (s3Response.Body) {
+        (s3Response.Body as any).pipe(res);
+      } else {
+        res.status(500).json({ error: "File stream not available" });
+      }
     } catch (error) {
-      console.error("Error downloading PDF from GridFS:", error);
+      console.error("Error downloading PDF from S3:", error);
       res.status(500).json({ error: "Failed to download PDF" });
     }
   },
@@ -179,9 +194,14 @@ export const summaryController = {
       } else {
         return res.status(400).json({ error: "No user identifier found" });
       }
-      const summary = await Summary.findOneAndDelete(query);
-      if (!summary) {
-        return res.status(404).json({ message: "Summary not found" });
+      const summary = await Summary.findOneAndDelete(query).lean();
+      if (summary && summary.pdfFileKey) {
+        await r2Client.send(
+          new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: summary.pdfFileKey,
+          })
+        );
       }
       res.json({ message: "Summary deleted successfully" });
     } catch (error) {
