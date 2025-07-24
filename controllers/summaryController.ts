@@ -5,7 +5,11 @@ import { Document } from "../models/Document";
 import axios from "axios";
 import mongoose from "mongoose";
 import { r2Client, R2_BUCKET } from "../config/r2";
-import { GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import {
+  GetObjectCommand,
+  DeleteObjectCommand,
+  PutObjectCommand,
+} from "@aws-sdk/client-s3";
 import htmlDocx from "html-docx-js";
 import mammoth from "mammoth";
 import { writeFile, unlink } from "fs/promises";
@@ -69,8 +73,36 @@ export const summaryController = {
       // Delete any existing summaries for this document
       await Summary.deleteMany({ documentId: response.documentId });
 
-      // Create the new summary
-      const summary = new Summary(response);
+      let pdfFileKey = null;
+      if (response.metadata && response.metadata.url) {
+        try {
+          const axiosResponse = await axios.get(response.metadata.url, {
+            responseType: "stream",
+          });
+          const s3Key = `${Date.now()}-${(response.title || "summary").replace(
+            /\s+/g,
+            "_"
+          )}.pdf`;
+          await r2Client.send(
+            new PutObjectCommand({
+              Bucket: R2_BUCKET,
+              Key: s3Key,
+              Body: axiosResponse.data,
+              ContentType: "application/pdf",
+            })
+          );
+          pdfFileKey = s3Key;
+        } catch (err) {
+          console.error("Failed to download/upload PDF to S3:", err);
+          return res
+            .status(500)
+            .json({ error: "Failed to upload PDF to Cloudflare R2" });
+        }
+      }
+
+      // Add pdfFileKey to the summary document
+      const summaryData = { ...response, pdfFileKey };
+      const summary = new Summary(summaryData);
       await summary.save();
 
       res.status(201).json(summary);
