@@ -326,7 +326,9 @@ exports.reportController = {
                 return res.status(404).json({ error: "Report not found" });
             }
             // Launch headless browser
-            const browser = await puppeteer_1.default.launch();
+            const browser = await puppeteer_1.default.launch({
+                args: ["--no-sandbox", "--disable-setuid-sandbox"],
+            });
             const page = await browser.newPage();
             // Set HTML content
             await page.setContent(report.content, { waitUntil: "networkidle0" });

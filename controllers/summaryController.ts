@@ -268,14 +268,16 @@ export const summaryController = {
     }
   },
 
-  async downloadHtmlPdf(req: Request, res: Response) {
+  async downloadHtmlPdf(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
       const summary = await Summary.findOne({ id });
       if (!summary || !summary.content) {
         return res.status(404).json({ error: "Summary not found" });
       }
-      const browser = await puppeteer.launch();
+      const browser = await puppeteer.launch({
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      });
       const page = await browser.newPage();
       await page.setContent(summary.content, { waitUntil: "networkidle0" });
       const pdfBuffer = await page.pdf({
