@@ -14,7 +14,6 @@ const util_1 = require("util");
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
 const index_1 = require("../index");
-const puppeteer_1 = __importDefault(require("puppeteer"));
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.summaryController = {
     async getAll(req, res) {
@@ -254,22 +253,29 @@ exports.summaryController = {
             if (!summary || !summary.content) {
                 return res.status(404).json({ error: "Summary not found" });
             }
-            const browser = await puppeteer_1.default.launch({
-                args: ["--no-sandbox", "--disable-setuid-sandbox"],
+            // Call PDF.co API to generate PDF from HTML
+            const pdfcoResponse = await axios_1.default.post("https://api.pdf.co/v1/pdf/convert/from/html", {
+                html: summary.content,
+                name: `${summary.title || "summary"}.pdf`,
+            }, {
+                headers: {
+                    "x-api-key": process.env.PDFCO_API_KEY,
+                    "Content-Type": "application/json",
+                },
             });
-            const page = await browser.newPage();
-            await page.setContent(summary.content, { waitUntil: "networkidle0" });
-            const pdfBuffer = await page.pdf({
-                format: "A4",
-                printBackground: true,
+            if (!pdfcoResponse.data || !pdfcoResponse.data.url) {
+                throw new Error("PDF.co did not return a PDF URL");
+            }
+            // Download the generated PDF and stream to client
+            const pdfStream = await axios_1.default.get(pdfcoResponse.data.url, {
+                responseType: "stream",
             });
-            await browser.close();
             res.setHeader("Content-Type", "application/pdf");
-            res.setHeader("Content-Disposition", `attachment; filename="${summary.title || "summary"}.pdf"`);
-            res.send(pdfBuffer);
+            res.setHeader("Content-Disposition", `attachment; filename=\"${summary.title || "summary"}.pdf\"`);
+            pdfStream.data.pipe(res);
         }
         catch (error) {
-            console.error("Error generating PDF from HTML:", error);
+            console.error("Error generating PDF with PDF.co:", error);
             res.status(500).json({ error: "Failed to generate PDF" });
         }
     },

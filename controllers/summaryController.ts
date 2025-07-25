@@ -275,24 +275,39 @@ export const summaryController = {
       if (!summary || !summary.content) {
         return res.status(404).json({ error: "Summary not found" });
       }
-      const browser = await puppeteer.launch({
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+
+      // Call PDF.co API to generate PDF from HTML
+      const pdfcoResponse = await axios.post(
+        "https://api.pdf.co/v1/pdf/convert/from/html",
+        {
+          html: summary.content,
+          name: `${summary.title || "summary"}.pdf`,
+        },
+        {
+          headers: {
+            "x-api-key": process.env.PDFCO_API_KEY,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (!pdfcoResponse.data || !pdfcoResponse.data.url) {
+        throw new Error("PDF.co did not return a PDF URL");
+      }
+
+      // Download the generated PDF and stream to client
+      const pdfStream = await axios.get(pdfcoResponse.data.url, {
+        responseType: "stream",
       });
-      const page = await browser.newPage();
-      await page.setContent(summary.content, { waitUntil: "networkidle0" });
-      const pdfBuffer = await page.pdf({
-        format: "A4",
-        printBackground: true,
-      });
-      await browser.close();
+
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${summary.title || "summary"}.pdf"`
+        `attachment; filename=\"${summary.title || "summary"}.pdf\"`
       );
-      res.send(pdfBuffer);
+      pdfStream.data.pipe(res);
     } catch (error) {
-      console.error("Error generating PDF from HTML:", error);
+      console.error("Error generating PDF with PDF.co:", error);
       res.status(500).json({ error: "Failed to generate PDF" });
     }
   },
