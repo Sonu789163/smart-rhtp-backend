@@ -28,6 +28,9 @@ router.get("/:id/download-pdf", reportController.downloadPdf);
 // Download DOCX for a report
 router.get("/:id/download-docx", reportController.downloadDocx);
 
+// Download PDF generated from HTML content for a report
+router.get("/:id/download-html-pdf", reportController.downloadPdfFromHtml);
+
 // POST /report-status/update (for n8n to notify status)
 router.post("/report-status/update", reportController.reportStatusUpdate);
 

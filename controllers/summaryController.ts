@@ -18,6 +18,7 @@ import { promisify } from "util";
 import path from "path";
 import os from "os";
 import { io } from "../index";
+import puppeteer from "puppeteer";
 
 const execAsync = promisify(exec);
 
@@ -264,6 +265,33 @@ export const summaryController = {
         message: "Failed to emit status update",
         error: err instanceof Error ? err.message : err,
       });
+    }
+  },
+
+  async downloadHtmlPdf(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const summary = await Summary.findOne({ id });
+      if (!summary || !summary.content) {
+        return res.status(404).json({ error: "Summary not found" });
+      }
+      const browser = await puppeteer.launch();
+      const page = await browser.newPage();
+      await page.setContent(summary.content, { waitUntil: "networkidle0" });
+      const pdfBuffer = await page.pdf({
+        format: "A4",
+        printBackground: true,
+      });
+      await browser.close();
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${summary.title || "summary"}.pdf"`
+      );
+      res.send(pdfBuffer);
+    } catch (error) {
+      console.error("Error generating PDF from HTML:", error);
+      res.status(500).json({ error: "Failed to generate PDF" });
     }
   },
 };

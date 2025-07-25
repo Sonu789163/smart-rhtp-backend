@@ -14,6 +14,7 @@ const util_1 = require("util");
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
 const index_1 = require("../index");
+const puppeteer_1 = __importDefault(require("puppeteer"));
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.summaryController = {
     async getAll(req, res) {
@@ -244,6 +245,30 @@ exports.summaryController = {
                 message: "Failed to emit status update",
                 error: err instanceof Error ? err.message : err,
             });
+        }
+    },
+    async downloadHtmlPdf(req, res) {
+        try {
+            const { id } = req.params;
+            const summary = await Summary_1.Summary.findOne({ id });
+            if (!summary || !summary.content) {
+                return res.status(404).json({ error: "Summary not found" });
+            }
+            const browser = await puppeteer_1.default.launch();
+            const page = await browser.newPage();
+            await page.setContent(summary.content, { waitUntil: "networkidle0" });
+            const pdfBuffer = await page.pdf({
+                format: "A4",
+                printBackground: true,
+            });
+            await browser.close();
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", `attachment; filename="${summary.title || "summary"}.pdf"`);
+            res.send(pdfBuffer);
+        }
+        catch (error) {
+            console.error("Error generating PDF from HTML:", error);
+            res.status(500).json({ error: "Failed to generate PDF" });
         }
     },
 };

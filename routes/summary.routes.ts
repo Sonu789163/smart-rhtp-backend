@@ -28,6 +28,9 @@ router.get("/:id/download-pdf", summaryController.downloadPdf);
 // Download DOCX for a summary
 router.get("/:id/download-docx", summaryController.downloadDocx);
 
+// Download PDF generated from HTML content for a summary
+router.get("/:id/download-html-pdf", summaryController.downloadHtmlPdf);
+
 // POST /summary-status/update (for n8n to notify status)
 router.post("/summary-status/update", summaryController.summaryStatusUpdate);
 

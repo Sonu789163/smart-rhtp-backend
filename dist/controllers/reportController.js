@@ -14,6 +14,7 @@ const child_process_1 = require("child_process");
 const util_1 = require("util");
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
+const puppeteer_1 = __importDefault(require("puppeteer"));
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.reportController = {
     async getAll(req, res) {
@@ -80,25 +81,78 @@ exports.reportController = {
                     },
                 });
             }
+            // 1. Find existing report for this document and user
+            let userQuery = {};
+            if (req.user.microsoftId) {
+                userQuery.microsoftId = req.user.microsoftId;
+            }
+            else if (req.user._id) {
+                userQuery.userId = req.user._id.toString();
+            }
+            const existingReport = await Report_1.Report.findOne({
+                drhpId,
+                rhpId,
+                ...userQuery,
+            });
+            // 2. If found, delete previous PDF from R2 and remove MongoDB record
+            if (existingReport) {
+                if (existingReport.pdfFileKey) {
+                    try {
+                        await r2_1.r2Client.send(new client_s3_1.DeleteObjectCommand({
+                            Bucket: r2_1.R2_BUCKET,
+                            Key: existingReport.pdfFileKey,
+                        }));
+                    }
+                    catch (err) {
+                        console.warn("Failed to delete previous PDF from R2:", err);
+                    }
+                }
+                await existingReport.deleteOne();
+            }
             const user = req.user;
             let pdfFileKey = null;
-            if (metadata.url) {
+            if (req.headers && metadata.url) {
                 try {
                     // Download the PDF from the URL and upload to S3
                     const response = await axios_1.default.get(metadata.url, {
                         responseType: "stream",
                     });
-                    const s3Key = `${Date.now()}-${title.replace(/\s+/g, "_")}.pdf`;
+                    let contentLength = undefined;
+                    // Prefer contentLength from metadata if provided by n8n
+                    if (metadata.contentLength &&
+                        !isNaN(Number(metadata.contentLength))) {
+                        contentLength = Number(metadata.contentLength);
+                    }
+                    else {
+                        // fallback: try to get it from HEAD request
+                        try {
+                            const headResp = await axios_1.default.head(metadata.url);
+                            contentLength = headResp.headers["content-length"]
+                                ? parseInt(headResp.headers["content-length"], 10)
+                                : undefined;
+                        }
+                        catch (e) {
+                            // If HEAD fails, continue without contentLength
+                        }
+                    }
+                    // Ensure file is stored in the 'reports/' directory
+                    const s3Key = `reports/${Date.now()}-${title.replace(/\s+/g, "_")}.pdf`;
                     await r2_1.r2Client.send(new client_s3_1.PutObjectCommand({
                         Bucket: r2_1.R2_BUCKET,
                         Key: s3Key,
                         Body: response.data,
                         ContentType: "application/pdf",
+                        ...(typeof contentLength === "number"
+                            ? { ContentLength: contentLength }
+                            : {}),
                     }));
                     pdfFileKey = s3Key;
                 }
                 catch (err) {
-                    console.error(err);
+                    console.error("PDF upload failed:", err);
+                    return res
+                        .status(500)
+                        .json({ message: "Failed to upload PDF to R2" });
                 }
             }
             const reportData = {
@@ -262,6 +316,34 @@ exports.reportController = {
         catch (error) {
             console.error("Error deleting report:", error);
             res.status(500).json({ error: "Failed to delete report" });
+        }
+    },
+    async downloadPdfFromHtml(req, res) {
+        try {
+            const { id } = req.params;
+            const report = await Report_1.Report.findOne({ id });
+            if (!report || !report.content) {
+                return res.status(404).json({ error: "Report not found" });
+            }
+            // Launch headless browser
+            const browser = await puppeteer_1.default.launch();
+            const page = await browser.newPage();
+            // Set HTML content
+            await page.setContent(report.content, { waitUntil: "networkidle0" });
+            // Generate PDF buffer
+            const pdfBuffer = await page.pdf({
+                format: "A4",
+                printBackground: true,
+            });
+            await browser.close();
+            // Send PDF as download
+            res.setHeader("Content-Type", "application/pdf");
+            res.setHeader("Content-Disposition", `attachment; filename="${report.title || "report"}.pdf"`);
+            res.send(pdfBuffer);
+        }
+        catch (error) {
+            console.error("Error generating PDF from HTML:", error);
+            res.status(500).json({ error: "Failed to generate PDF" });
         }
     },
 };
