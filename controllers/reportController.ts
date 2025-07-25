@@ -87,24 +87,6 @@ export const reportController = {
         });
       }
 
-      // 1. Find existing report for this document and user
-      let userQuery: any = {};
-      if (req.user.microsoftId) {
-        userQuery.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        userQuery.userId = req.user._id.toString();
-      }
-      const existingReport = await Report.findOne({
-        drhpId,
-        rhpId,
-        ...userQuery,
-      });
-
-      // 2. If found, remove MongoDB record
-      if (existingReport) {
-        await existingReport.deleteOne();
-      }
-
       const user = req.user;
       const reportData: any = {
         id: Date.now().toString(),

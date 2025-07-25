@@ -64,8 +64,6 @@ exports.summaryController = {
                     required: { title, content, documentId },
                 });
             }
-            // Delete any existing summaries for this document
-            await Summary_1.Summary.deleteMany({ documentId });
             const user = req.user;
             const summaryData = {
                 id: Date.now().toString(),
