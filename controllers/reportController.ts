@@ -63,15 +63,8 @@ export const reportController = {
 
   async create(req: AuthRequest, res: Response) {
     try {
-      const {
-        title,
-        content,
-        drhpId,
-        rhpId,
-        drhpNamespace,
-        rhpNamespace,
-        metadata,
-      } = req.body;
+      const { title, content, drhpId, rhpId, drhpNamespace, rhpNamespace } =
+        req.body;
 
       if (
         !title ||
@@ -107,79 +100,12 @@ export const reportController = {
         ...userQuery,
       });
 
-      // 2. If found, delete previous PDF from R2 and remove MongoDB record
+      // 2. If found, remove MongoDB record
       if (existingReport) {
-        if (existingReport.pdfFileKey) {
-          try {
-            await r2Client.send(
-              new DeleteObjectCommand({
-                Bucket: R2_BUCKET,
-                Key: existingReport.pdfFileKey,
-              })
-            );
-          } catch (err) {
-            console.warn("Failed to delete previous PDF from R2:", err);
-          }
-        }
         await existingReport.deleteOne();
       }
 
       const user = req.user;
-      let pdfFileKey = null;
-
-      if (req.headers && metadata.url) {
-        try {
-          // Download the PDF from the URL and upload to S3
-          const response = await axios.get(metadata.url, {
-            responseType: "stream",
-          });
-
-          let contentLength = undefined;
-
-          // Prefer contentLength from metadata if provided by n8n
-          if (
-            metadata.contentLength &&
-            !isNaN(Number(metadata.contentLength))
-          ) {
-            contentLength = Number(metadata.contentLength);
-          } else {
-            // fallback: try to get it from HEAD request
-            try {
-              const headResp = await axios.head(metadata.url);
-              contentLength = headResp.headers["content-length"]
-                ? parseInt(headResp.headers["content-length"], 10)
-                : undefined;
-            } catch (e) {
-              // If HEAD fails, continue without contentLength
-            }
-          }
-
-          // Ensure file is stored in the 'reports/' directory
-          const s3Key = `reports/${Date.now()}-${title.replace(
-            /\s+/g,
-            "_"
-          )}.pdf`;
-
-          await r2Client.send(
-            new PutObjectCommand({
-              Bucket: R2_BUCKET,
-              Key: s3Key,
-              Body: response.data,
-              ContentType: "application/pdf",
-              ...(typeof contentLength === "number"
-                ? { ContentLength: contentLength }
-                : {}),
-            })
-          );
-          pdfFileKey = s3Key;
-        } catch (err) {
-          console.error("PDF upload failed:", err);
-          return res
-            .status(500)
-            .json({ message: "Failed to upload PDF to R2" });
-        }
-      }
-
       const reportData: any = {
         id: Date.now().toString(),
         title,
@@ -189,8 +115,6 @@ export const reportController = {
         drhpNamespace,
         rhpNamespace,
         updatedAt: new Date(),
-        metadata,
-        pdfFileKey,
       };
 
       if (user.microsoftId) {
@@ -234,30 +158,6 @@ export const reportController = {
     }
   },
 
-  // Download PDF from GridFS by report ID
-  async downloadPdf(req: AuthRequest, res: Response) {
-    try {
-      const { id } = req.params;
-      const report = await Report.findOne({ id });
-      if (!report || !report.pdfFileKey) {
-        return res.status(404).json({ error: "PDF not found for this report" });
-      }
-      res.set("Content-Type", "application/pdf");
-      const getObjectCommand = new GetObjectCommand({
-        Bucket: R2_BUCKET,
-        Key: report.pdfFileKey,
-      });
-      const s3Response = await r2Client.send(getObjectCommand);
-      if (s3Response.Body) {
-        (s3Response.Body as any).pipe(res);
-      } else {
-        res.status(500).json({ error: "File stream not available" });
-      }
-    } catch (error) {
-      console.error("Error downloading PDF from S3:", error);
-      res.status(500).json({ error: "Failed to download PDF" });
-    }
-  },
 
   // Download DOCX generated from HTML content by report ID
   async downloadDocx(req: AuthRequest, res: Response) {
@@ -338,15 +238,6 @@ export const reportController = {
         return res.status(404).json({ error: "Report not found" });
       }
 
-      // Delete PDF file from S3
-      if (report.pdfFileKey) {
-        await r2Client.send(
-          new DeleteObjectCommand({
-            Bucket: R2_BUCKET,
-            Key: report.pdfFileKey,
-          })
-        );
-      }
 
       await report.deleteOne();
       res.json({ message: "Report deleted successfully" });

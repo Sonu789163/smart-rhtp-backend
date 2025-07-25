@@ -11,13 +11,6 @@ const reportSchema = new mongoose.Schema({
   rhpNamespace: { type: String, required: true },
   microsoftId: { type: String },
   userId: { type: String },
-  pdfFileKey: { type: String },
-  metadata: {
-    pageCount: Number,
-    contentLength: Number,
-    url: String,
-    name: String,
-  },
 });
 
 reportSchema.pre("validate", function (next) {
