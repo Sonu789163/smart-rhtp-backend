@@ -49,24 +49,17 @@ export const chatController = {
       const user = req.user;
       const chatData = { ...req.body };
 
-      // Validate that the document belongs to the user
-      const documentQuery: any = { id: chatData.documentId };
+      // Only check if the document exists by id
+      const document = await Document.findOne({ id: chatData.documentId });
+      if (!document) {
+        return res.status(404).json({ error: "Document not found" });
+      }
       if (user.microsoftId) {
-        documentQuery.microsoftId = user.microsoftId;
         chatData.microsoftId = user.microsoftId;
       } else if (user._id) {
-        documentQuery.userId = user._id.toString();
         chatData.userId = user._id.toString();
       } else {
         return res.status(400).json({ error: "No user identifier found" });
-      }
-
-      // Check if document exists and belongs to user
-      const document = await Document.findOne(documentQuery);
-      if (!document) {
-        return res
-          .status(404)
-          .json({ error: "Document not found or access denied" });
       }
 
       chatData.messages = Array.isArray(req.body.messages)

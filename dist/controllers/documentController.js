@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -47,15 +14,6 @@ exports.documentController = {
     async getAll(req, res) {
         try {
             const query = { type: "DRHP" };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
             const documents = await Document_1.Document.find(query).sort({ uploadedAt: -1 });
             res.json(documents);
         }
@@ -66,15 +24,6 @@ exports.documentController = {
     async getById(req, res) {
         try {
             const query = { id: req.params.id };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
             const document = await Document_1.Document.findOne(query);
             if (!document) {
                 return res.status(404).json({ error: "Document not found" });
@@ -87,17 +36,7 @@ exports.documentController = {
     },
     async create(req, res) {
         try {
-            const user = req.user;
             const docData = { ...req.body };
-            if (user.microsoftId) {
-                docData.microsoftId = user.microsoftId;
-            }
-            else if (user._id) {
-                docData.userId = user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
             // Ensure namespace is always set
             if (!docData.namespace) {
                 docData.namespace = docData.name;
@@ -114,15 +53,6 @@ exports.documentController = {
     async update(req, res) {
         try {
             const query = { id: req.params.id };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
             const document = await Document_1.Document.findOneAndUpdate(query, req.body, {
                 new: true,
             });
@@ -138,50 +68,11 @@ exports.documentController = {
     async delete(req, res) {
         try {
             const query = { id: req.params.id };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
-            const document = await Document_1.Document.findOne(query);
+            const document = await Document_1.Document.findOneAndDelete(query);
             if (!document) {
                 return res.status(404).json({ error: "Document not found" });
             }
-            // Find and delete the related document (RHP or DRHP)
-            let relatedDocument = null;
-            if (document.relatedDrhpId) {
-                relatedDocument = await Document_1.Document.findById(document.relatedDrhpId);
-            }
-            else if (document.relatedRhpId) {
-                relatedDocument = await Document_1.Document.findById(document.relatedRhpId);
-            }
-            // Delete files from S3 for both documents
-            const { DeleteObjectCommand } = await Promise.resolve().then(() => __importStar(require("@aws-sdk/client-s3")));
-            if (document.fileKey) {
-                await r2_1.r2Client.send(new DeleteObjectCommand({
-                    Bucket: r2_1.R2_BUCKET,
-                    Key: document.fileKey,
-                }));
-            }
-            if (relatedDocument && relatedDocument.fileKey) {
-                await r2_1.r2Client.send(new DeleteObjectCommand({
-                    Bucket: r2_1.R2_BUCKET,
-                    Key: relatedDocument.fileKey,
-                }));
-            }
-            // Delete both documents
-            await document.deleteOne();
-            if (relatedDocument) {
-                await relatedDocument.deleteOne();
-            }
-            res.json({
-                message: "Document and related document deleted successfully",
-                deletedDocuments: relatedDocument ? 2 : 1,
-            });
+            res.json({ message: "Document deleted successfully" });
         }
         catch (error) {
             res.status(500).json({ error: "Failed to delete document" });
@@ -203,15 +94,13 @@ exports.documentController = {
                 namespace: req.body.namespace || originalname,
                 type: "DRHP", // Set type for DRHP documents
             };
-            if (user === null || user === void 0 ? void 0 : user.microsoftId) {
-                docData.microsoftId = user.microsoftId;
-            }
-            else if (user === null || user === void 0 ? void 0 : user._id) {
-                docData.userId = user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
+            // if (user?.microsoftId) {
+            //   docData.microsoftId = user.microsoftId;
+            // } else if (user?._id) {
+            //   docData.userId = user._id.toString();
+            // } else {
+            //   return res.status(400).json({ error: "No user identifier found" });
+            // }
             const document = new Document_1.Document(docData);
             await document.save();
             // Notify n8n for further processing
@@ -230,7 +119,6 @@ exports.documentController = {
             form.append("documentId", document.id);
             form.append("namespace", document.name);
             form.append("name", document.name);
-            form.append("userId", document.userId || document.microsoftId);
             console.log("fromData", form);
             try {
                 await axios_1.default.post(n8nWebhookUrl, form, {
@@ -286,15 +174,13 @@ exports.documentController = {
                     .json({ error: "Namespace parameter is required" });
             }
             const query = { namespace: namespace };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
+            // if (req.user.microsoftId) {
+            //   query.microsoftId = req.user.microsoftId;
+            // } else if (req.user._id) {
+            //   query.userId = req.user._id.toString();
+            // } else {
+            //   return res.status(400).json({ error: "No user identifier found" });
+            // }
             const existingDocument = await Document_1.Document.findOne(query);
             if (existingDocument) {
                 res.json({
@@ -341,7 +227,6 @@ exports.documentController = {
         }
     },
     async uploadRhp(req, res) {
-        var _a;
         try {
             const { drhpId } = req.body;
             if (!req.file)
@@ -352,7 +237,7 @@ exports.documentController = {
             if (!drhp)
                 return res.status(404).json({ error: "DRHP not found" });
             const fileKey = req.file.key;
-            const user = req.user;
+            // const user = (req as any).user;
             // Create RHP namespace by appending "-rhp" to the DRHP namespace
             const rhpNamespace = req.file.originalname;
             const rhpDoc = new Document_1.Document({
@@ -360,9 +245,7 @@ exports.documentController = {
                 fileKey: fileKey,
                 name: drhp.name,
                 namespace: drhp.namespace, // Keep original namespace for reference
-                rhpNamespace: rhpNamespace, // Store RHP-specific namespace
-                microsoftId: user === null || user === void 0 ? void 0 : user.microsoftId,
-                userId: (_a = user === null || user === void 0 ? void 0 : user._id) === null || _a === void 0 ? void 0 : _a.toString(),
+                rhpNamespace: rhpNamespace,
                 type: "RHP",
                 relatedDrhpId: drhp.id,
             });
@@ -385,7 +268,6 @@ exports.documentController = {
             form.append("documentId", rhpDoc.id);
             form.append("namespace", rhpNamespace); // Use RHP namespace for n8n
             form.append("name", drhp.name);
-            form.append("userId", rhpDoc.userId || rhpDoc.microsoftId);
             try {
                 await axios_1.default.post(n8nWebhookUrl, form, {
                     headers: form.getHeaders(),

@@ -14,15 +14,5 @@ const reportSchema = new mongoose_1.default.Schema({
     rhpId: { type: String, required: true },
     drhpNamespace: { type: String, required: true },
     rhpNamespace: { type: String, required: true },
-    microsoftId: { type: String },
-    userId: { type: String },
-});
-reportSchema.pre("validate", function (next) {
-    if (!this.microsoftId && !this.userId) {
-        next(new Error("Either microsoftId or userId must be present."));
-    }
-    else {
-        next();
-    }
 });
 exports.Report = mongoose_1.default.model("Report", reportSchema);

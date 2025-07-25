@@ -11,15 +11,5 @@ const summarySchema = new mongoose_1.default.Schema({
     content: { type: String, required: true },
     updatedAt: { type: Date, default: Date.now },
     documentId: { type: String, required: true },
-    microsoftId: { type: String },
-    userId: { type: String },
-});
-summarySchema.pre("validate", function (next) {
-    if (!this.microsoftId && !this.userId) {
-        next(new Error("Either microsoftId or userId must be present."));
-    }
-    else {
-        next();
-    }
 });
 exports.Summary = mongoose_1.default.model("Summary", summarySchema);

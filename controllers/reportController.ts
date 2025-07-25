@@ -22,17 +22,9 @@ interface AuthRequest extends Request {
 }
 
 export const reportController = {
-  async getAll(req: AuthRequest, res: Response) {
+  async getAll(req: Request, res: Response) {
     try {
-      const query: any = {};
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
-      }
-      const reports = await Report.find(query).sort({ updatedAt: -1 });
+      const reports = await Report.find({}).sort({ updatedAt: -1 });
       res.json(reports);
     } catch (error) {
       console.error("Error fetching reports:", error);
@@ -40,17 +32,9 @@ export const reportController = {
     }
   },
 
-  async getById(req: AuthRequest, res: Response) {
+  async getById(req: Request, res: Response) {
     try {
-      const query: any = { id: req.params.id };
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
-      }
-      const report = await Report.findOne(query);
+      const report = await Report.findOne({ id: req.params.id });
       if (!report) {
         return res.status(404).json({ error: "Report not found" });
       }
@@ -61,7 +45,7 @@ export const reportController = {
     }
   },
 
-  async create(req: AuthRequest, res: Response) {
+  async create(req: Request, res: Response) {
     try {
       const { title, content, drhpId, rhpId, drhpNamespace, rhpNamespace } =
         req.body;
@@ -87,7 +71,6 @@ export const reportController = {
         });
       }
 
-      const user = req.user;
       const reportData: any = {
         id: Date.now().toString(),
         title,
@@ -99,24 +82,15 @@ export const reportController = {
         updatedAt: new Date(),
       };
 
-      if (user.microsoftId) {
-        reportData.microsoftId = user.microsoftId;
-      } else if (user._id) {
-        reportData.userId = user._id.toString();
-      }
-
       const report = new Report(reportData);
       await report.save();
 
       res.status(201).json(report);
     } catch (error) {
       console.error("Error creating report:", error);
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error occurred";
-      res.status(500).json({
-        message: "Error creating report",
-        error: errorMessage,
-      });
+      res
+        .status(500)
+        .json({ error: "Failed to create report", details: error });
     }
   },
 
@@ -139,7 +113,6 @@ export const reportController = {
       });
     }
   },
-
 
   // Download DOCX generated from HTML content by report ID
   async downloadDocx(req: AuthRequest, res: Response) {
@@ -219,7 +192,6 @@ export const reportController = {
       if (!report) {
         return res.status(404).json({ error: "Report not found" });
       }
-
 
       await report.deleteOne();
       res.json({ message: "Report deleted successfully" });
