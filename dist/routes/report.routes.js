@@ -19,8 +19,6 @@ router.post("/create-report", reportController_1.reportController.create);
 router.put("/:id", reportController_1.reportController.update);
 // Delete report
 router.delete("/:id", reportController_1.reportController.delete);
-// Download PDF for a report
-router.get("/:id/download-pdf", reportController_1.reportController.downloadPdf);
 // Download DOCX for a report
 router.get("/:id/download-docx", reportController_1.reportController.downloadDocx);
 // Download PDF generated from HTML content for a report

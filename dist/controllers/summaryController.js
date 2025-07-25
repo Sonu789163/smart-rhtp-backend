@@ -6,8 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.summaryController = void 0;
 const Summary_1 = require("../models/Summary");
 const axios_1 = __importDefault(require("axios"));
-const r2_1 = require("../config/r2");
-const client_s3_1 = require("@aws-sdk/client-s3");
 const promises_1 = require("fs/promises");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
@@ -59,36 +57,29 @@ exports.summaryController = {
     },
     async create(req, res) {
         try {
-            const response = req.body;
-            if (!response) {
-                throw new Error("Data is empty");
+            const { title, content, documentId } = req.body;
+            if (!title || !content || !documentId) {
+                return res.status(400).json({
+                    message: "Missing required fields",
+                    required: { title, content, documentId },
+                });
             }
             // Delete any existing summaries for this document
-            await Summary_1.Summary.deleteMany({ documentId: response.documentId });
-            let pdfFileKey = null;
-            if (response.metadata && response.metadata.url) {
-                try {
-                    const axiosResponse = await axios_1.default.get(response.metadata.url, {
-                        responseType: "stream",
-                    });
-                    const s3Key = `${Date.now()}-${(response.title || "summary").replace(/\s+/g, "_")}.pdf`;
-                    await r2_1.r2Client.send(new client_s3_1.PutObjectCommand({
-                        Bucket: r2_1.R2_BUCKET,
-                        Key: s3Key,
-                        Body: axiosResponse.data,
-                        ContentType: "application/pdf",
-                    }));
-                    pdfFileKey = s3Key;
-                }
-                catch (err) {
-                    console.error("Failed to download/upload PDF to S3:", err);
-                    return res
-                        .status(500)
-                        .json({ error: "Failed to upload PDF to Cloudflare R2" });
-                }
+            await Summary_1.Summary.deleteMany({ documentId });
+            const user = req.user;
+            const summaryData = {
+                id: Date.now().toString(),
+                title,
+                content,
+                documentId,
+                updatedAt: new Date(),
+            };
+            if (user.microsoftId) {
+                summaryData.microsoftId = user.microsoftId;
             }
-            // Add pdfFileKey to the summary document
-            const summaryData = { ...response, pdfFileKey };
+            else if (user._id) {
+                summaryData.userId = user._id.toString();
+            }
             const summary = new Summary_1.Summary(summaryData);
             await summary.save();
             res.status(201).json(summary);
@@ -99,41 +90,6 @@ exports.summaryController = {
                 error: "Failed to create summary",
                 details: error,
             });
-        }
-    },
-    // New endpoint: Download PDF from GridFS by summary ID
-    async downloadPdf(req, res) {
-        try {
-            const { id } = req.params;
-            const { documentId } = req.query; // Accept documentId as a query parameter for extra safety
-            let summary;
-            if (documentId) {
-                summary = (await Summary_1.Summary.findOne({ id, documentId }).lean());
-            }
-            else {
-                summary = (await Summary_1.Summary.findOne({ id }).lean());
-            }
-            if (!summary || !summary.pdfFileKey) {
-                return res
-                    .status(404)
-                    .json({ error: "PDF not found for this summary" });
-            }
-            res.set("Content-Type", "application/pdf");
-            const getObjectCommand = new client_s3_1.GetObjectCommand({
-                Bucket: r2_1.R2_BUCKET,
-                Key: summary.pdfFileKey,
-            });
-            const s3Response = await r2_1.r2Client.send(getObjectCommand);
-            if (s3Response.Body) {
-                s3Response.Body.pipe(res);
-            }
-            else {
-                res.status(500).json({ error: "File stream not available" });
-            }
-        }
-        catch (error) {
-            console.error("Error downloading PDF from S3:", error);
-            res.status(500).json({ error: "Failed to download PDF" });
         }
     },
     // Endpoint: Download DOCX generated from HTML content by summary ID
@@ -209,12 +165,6 @@ exports.summaryController = {
                 return res.status(400).json({ error: "No user identifier found" });
             }
             const summary = await Summary_1.Summary.findOneAndDelete(query).lean();
-            if (summary && summary.pdfFileKey) {
-                await r2_1.r2Client.send(new client_s3_1.DeleteObjectCommand({
-                    Bucket: r2_1.R2_BUCKET,
-                    Key: summary.pdfFileKey,
-                }));
-            }
             res.json({ message: "Summary deleted successfully" });
         }
         catch (error) {

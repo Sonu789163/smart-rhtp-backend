@@ -22,9 +22,6 @@ router.put("/:id", reportController.update);
 // Delete report
 router.delete("/:id", reportController.delete);
 
-// Download PDF for a report
-router.get("/:id/download-pdf", reportController.downloadPdf);
-
 // Download DOCX for a report
 router.get("/:id/download-docx", reportController.downloadDocx);
 

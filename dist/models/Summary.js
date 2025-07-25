@@ -13,14 +13,6 @@ const summarySchema = new mongoose_1.default.Schema({
     documentId: { type: String, required: true },
     microsoftId: { type: String },
     userId: { type: String },
-    pdfFileKey: { type: String },
-    metadata: {
-        pageCount: Number,
-        url: String,
-        pdfExpiry: String,
-        duration: Number,
-        name: String,
-    },
 });
 summarySchema.pre("validate", function (next) {
     if (!this.microsoftId && !this.userId) {
