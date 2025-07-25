@@ -63,9 +63,6 @@ export const summaryController = {
         });
       }
 
-      // Delete any existing summaries for this document
-      await Summary.deleteMany({ documentId });
-
       const user = req.user;
       const summaryData: any = {
         id: Date.now().toString(),
