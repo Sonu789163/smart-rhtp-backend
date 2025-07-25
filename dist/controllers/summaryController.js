@@ -16,17 +16,7 @@ const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.summaryController = {
     async getAll(req, res) {
         try {
-            const query = {};
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
-            const summaries = await Summary_1.Summary.find(query).sort({ updatedAt: -1 });
+            const summaries = await Summary_1.Summary.find({}).sort({ updatedAt: -1 });
             res.json(summaries);
         }
         catch (error) {
@@ -37,17 +27,9 @@ exports.summaryController = {
     async getByDocumentId(req, res) {
         try {
             const { documentId } = req.params;
-            const query = { documentId };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
-            const summaries = await Summary_1.Summary.find(query).sort({ updatedAt: -1 });
+            const summaries = await Summary_1.Summary.find({ documentId }).sort({
+                updatedAt: -1,
+            });
             res.json(summaries);
         }
         catch (error) {
@@ -64,7 +46,6 @@ exports.summaryController = {
                     required: { title, content, documentId },
                 });
             }
-            const user = req.user;
             const summaryData = {
                 id: Date.now().toString(),
                 title,
@@ -72,12 +53,6 @@ exports.summaryController = {
                 documentId,
                 updatedAt: new Date(),
             };
-            if (user.microsoftId) {
-                summaryData.microsoftId = user.microsoftId;
-            }
-            else if (user._id) {
-                summaryData.userId = user._id.toString();
-            }
             const summary = new Summary_1.Summary(summaryData);
             await summary.save();
             res.status(201).json(summary);

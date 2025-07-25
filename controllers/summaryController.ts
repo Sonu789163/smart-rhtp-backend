@@ -16,17 +16,9 @@ interface AuthRequest extends Request {
 }
 
 export const summaryController = {
-  async getAll(req: AuthRequest, res: Response) {
+  async getAll(req: Request, res: Response) {
     try {
-      const query: any = {};
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
-      }
-      const summaries = await Summary.find(query).sort({ updatedAt: -1 });
+      const summaries = await Summary.find({}).sort({ updatedAt: -1 });
       res.json(summaries);
     } catch (error) {
       console.error("Error fetching summaries:", error);
@@ -34,18 +26,12 @@ export const summaryController = {
     }
   },
 
-  async getByDocumentId(req: AuthRequest, res: Response) {
+  async getByDocumentId(req: Request, res: Response) {
     try {
       const { documentId } = req.params;
-      const query: any = { documentId };
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
-      }
-      const summaries = await Summary.find(query).sort({ updatedAt: -1 });
+      const summaries = await Summary.find({ documentId }).sort({
+        updatedAt: -1,
+      });
       res.json(summaries);
     } catch (error) {
       console.error("Error fetching summaries:", error);
@@ -53,7 +39,7 @@ export const summaryController = {
     }
   },
 
-  async create(req: AuthRequest, res: Response) {
+  async create(req: Request, res: Response) {
     try {
       const { title, content, documentId } = req.body;
       if (!title || !content || !documentId) {
@@ -63,7 +49,6 @@ export const summaryController = {
         });
       }
 
-      const user = req.user;
       const summaryData: any = {
         id: Date.now().toString(),
         title,
@@ -71,11 +56,6 @@ export const summaryController = {
         documentId,
         updatedAt: new Date(),
       };
-      if (user.microsoftId) {
-        summaryData.microsoftId = user.microsoftId;
-      } else if (user._id) {
-        summaryData.userId = user._id.toString();
-      }
 
       const summary = new Summary(summaryData);
       await summary.save();
@@ -89,7 +69,6 @@ export const summaryController = {
       });
     }
   },
-
 
   // Endpoint: Download DOCX generated from HTML content by summary ID
   async downloadDocx(req: AuthRequest, res: Response) {
@@ -170,7 +149,7 @@ export const summaryController = {
         return res.status(400).json({ error: "No user identifier found" });
       }
       const summary = await Summary.findOneAndDelete(query).lean();
-      
+
       res.json({ message: "Summary deleted successfully" });
     } catch (error) {
       console.error("Error deleting summary:", error);

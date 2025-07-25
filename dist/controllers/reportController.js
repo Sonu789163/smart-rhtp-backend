@@ -16,17 +16,7 @@ const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.reportController = {
     async getAll(req, res) {
         try {
-            const query = {};
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
-            const reports = await Report_1.Report.find(query).sort({ updatedAt: -1 });
+            const reports = await Report_1.Report.find({}).sort({ updatedAt: -1 });
             res.json(reports);
         }
         catch (error) {
@@ -36,17 +26,7 @@ exports.reportController = {
     },
     async getById(req, res) {
         try {
-            const query = { id: req.params.id };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
-            }
-            const report = await Report_1.Report.findOne(query);
+            const report = await Report_1.Report.findOne({ id: req.params.id });
             if (!report) {
                 return res.status(404).json({ error: "Report not found" });
             }
@@ -78,7 +58,6 @@ exports.reportController = {
                     },
                 });
             }
-            const user = req.user;
             const reportData = {
                 id: Date.now().toString(),
                 title,
@@ -89,23 +68,15 @@ exports.reportController = {
                 rhpNamespace,
                 updatedAt: new Date(),
             };
-            if (user.microsoftId) {
-                reportData.microsoftId = user.microsoftId;
-            }
-            else if (user._id) {
-                reportData.userId = user._id.toString();
-            }
             const report = new Report_1.Report(reportData);
             await report.save();
             res.status(201).json(report);
         }
         catch (error) {
             console.error("Error creating report:", error);
-            const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-            res.status(500).json({
-                message: "Error creating report",
-                error: errorMessage,
-            });
+            res
+                .status(500)
+                .json({ error: "Failed to create report", details: error });
         }
     },
     async reportStatusUpdate(req, res) {
