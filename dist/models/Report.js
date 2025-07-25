@@ -19,9 +19,8 @@ const reportSchema = new mongoose_1.default.Schema({
     pdfFileKey: { type: String },
     metadata: {
         pageCount: Number,
+        contentLength: Number,
         url: String,
-        pdfExpiry: String,
-        duration: Number,
         name: String,
     },
 });

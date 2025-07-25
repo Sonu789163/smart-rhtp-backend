@@ -23,6 +23,8 @@ router.delete("/:id", reportController_1.reportController.delete);
 router.get("/:id/download-pdf", reportController_1.reportController.downloadPdf);
 // Download DOCX for a report
 router.get("/:id/download-docx", reportController_1.reportController.downloadDocx);
+// Download PDF generated from HTML content for a report
+router.get("/:id/download-html-pdf", reportController_1.reportController.downloadPdfFromHtml);
 // POST /report-status/update (for n8n to notify status)
 router.post("/report-status/update", reportController_1.reportController.reportStatusUpdate);
 exports.default = router;
