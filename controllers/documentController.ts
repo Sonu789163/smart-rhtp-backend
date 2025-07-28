@@ -1,8 +1,5 @@
 import { Request, Response } from "express";
 import { Document } from "../models/Document";
-import { v4 as uuidv4 } from "uuid";
-import mongoose from "mongoose";
-import { GridFSBucket } from "mongodb";
 import axios from "axios";
 import FormData from "form-data";
 import { io } from "../index";
