@@ -68,25 +68,10 @@ exports.documentController = {
     async delete(req, res) {
         try {
             const query = { id: req.params.id };
-            const document = await Document_1.Document.findOne(query);
+            const document = await Document_1.Document.findOneAndDelete(query);
             if (!document) {
                 return res.status(404).json({ error: "Document not found" });
             }
-            // Delete file from Cloudflare R2
-            try {
-                if (document.fileKey) {
-                    await r2_1.r2Client.send(new client_s3_1.DeleteObjectCommand({
-                        Bucket: r2_1.R2_BUCKET,
-                        Key: document.fileKey,
-                    }));
-                }
-            }
-            catch (r2Error) {
-                console.error("Failed to delete file from Cloudflare R2:", r2Error);
-                // Optionally, you can return an error here or just log and continue
-            }
-            // Delete document from MongoDB
-            await Document_1.Document.findOneAndDelete(query);
             res.json({ message: "Document deleted successfully" });
         }
         catch (error) {
@@ -103,7 +88,7 @@ exports.documentController = {
             const user = req.user;
             // Use namespace from frontend if present, else fallback to originalname
             const docData = {
-                id: uuidv4(), // generate a unique document id
+                id: fileKey, // generate a unique document id
                 name: originalname,
                 fileKey: fileKey,
                 namespace: req.body.namespace || originalname,
