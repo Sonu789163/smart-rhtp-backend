@@ -21,7 +21,7 @@ const upload = (0, multer_1.default)({
         contentType: multer_s3_1.default.AUTO_CONTENT_TYPE,
         key: function (req, file, cb) {
             // Use a unique key for each file, e.g., timestamp + original name
-            const uniqueKey = `documents/${Date.now()}-${file.originalname}`;
+            const uniqueKey = `${Date.now()}-${file.originalname}`;
             cb(null, uniqueKey);
         },
         acl: "private", // or 'public-read' if you want public access
