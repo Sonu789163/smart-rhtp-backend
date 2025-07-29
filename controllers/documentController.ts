@@ -91,7 +91,7 @@ export const documentController = {
       const user = (req as any).user;
       // Use namespace from frontend if present, else fallback to originalname
       const docData: any = {
-        id: fileKey,
+        id: uuidv4(), // generate a unique document id
         name: originalname,
         fileKey: fileKey,
         namespace: req.body.namespace || originalname,

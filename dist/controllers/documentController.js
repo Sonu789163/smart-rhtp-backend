@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.documentController = void 0;
 const Document_1 = require("../models/Document");
+const uuid_1 = require("uuid");
 const axios_1 = __importDefault(require("axios"));
 const form_data_1 = __importDefault(require("form-data"));
 const index_1 = require("../index");
@@ -88,7 +89,7 @@ exports.documentController = {
             const user = req.user;
             // Use namespace from frontend if present, else fallback to originalname
             const docData = {
-                id: fileKey,
+                id: (0, uuid_1.v4)(), // generate a unique document id
                 name: originalname,
                 fileKey: fileKey,
                 namespace: req.body.namespace || originalname,
