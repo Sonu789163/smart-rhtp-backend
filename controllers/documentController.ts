@@ -4,7 +4,7 @@ import axios from "axios";
 import FormData from "form-data";
 import { io } from "../index";
 import { r2Client, R2_BUCKET } from "../config/r2";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 
 interface AuthRequest extends Request {
   user?: any;
@@ -68,12 +68,47 @@ export const documentController = {
   async delete(req: Request, res: Response) {
     try {
       const query: any = { id: req.params.id };
-      const document = await Document.findOneAndDelete(query);
+      const document = await Document.findOne(query);
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
-      res.json({ message: "Document deleted successfully" });
+
+      // Delete DRHP file from R2
+      if (document.fileKey) {
+        try {
+          const deleteCommand = new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: document.fileKey,
+          });
+          await r2Client.send(deleteCommand);
+        } catch (err) {
+          console.error("Failed to delete DRHP file from R2:", err);
+        }
+      }
+
+      // If DRHP has a related RHP, delete RHP file and document
+      if (document.relatedRhpId) {
+        const rhpDoc = await Document.findOne({ id: document.relatedRhpId });
+        if (rhpDoc && rhpDoc.fileKey) {
+          try {
+            const deleteRhpCommand = new DeleteObjectCommand({
+              Bucket: R2_BUCKET,
+              Key: rhpDoc.fileKey,
+            });
+            await r2Client.send(deleteRhpCommand);
+          } catch (err) {
+            console.error("Failed to delete RHP file from R2:", err);
+          }
+          await Document.deleteOne({ id: document.relatedRhpId });
+        }
+      }
+
+      // Delete DRHP document from MongoDB
+      await Document.deleteOne({ id: document.id });
+
+      res.json({ message: "Document and related files deleted successfully" });
     } catch (error) {
+      console.error("Error deleting document:", error);
       res.status(500).json({ error: "Failed to delete document" });
     }
   },
