@@ -1,13 +1,11 @@
 import { Request, Response } from "express";
 import { Document } from "../models/Document";
 import { v4 as uuidv4 } from "uuid";
-import mongoose from "mongoose";
-import { GridFSBucket } from "mongodb";
 import axios from "axios";
 import FormData from "form-data";
 import { io } from "../index";
 import { r2Client, R2_BUCKET } from "../config/r2";
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 
 interface AuthRequest extends Request {
   user?: any;
@@ -71,10 +69,26 @@ export const documentController = {
   async delete(req: Request, res: Response) {
     try {
       const query: any = { id: req.params.id };
-      const document = await Document.findOneAndDelete(query);
+      const document = await Document.findOne(query);
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
+      // Delete file from Cloudflare R2
+      try {
+        if (document.fileKey) {
+          await r2Client.send(
+            new DeleteObjectCommand({
+              Bucket: R2_BUCKET,
+              Key: document.fileKey,
+            })
+          );
+        }
+      } catch (r2Error) {
+        console.error("Failed to delete file from Cloudflare R2:", r2Error);
+        // Optionally, you can return an error here or just log and continue
+      }
+      // Delete document from MongoDB
+      await Document.findOneAndDelete(query);
       res.json({ message: "Document deleted successfully" });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete document" });
