@@ -25,7 +25,7 @@ const upload = multer({
       cb: (error: Error | null, key?: string) => void
     ) {
       // Use a unique key for each file, e.g., timestamp + original name
-      const uniqueKey = `${Date.now()}-${file.originalname}`;
+      const uniqueKey = `documents/${Date.now()}-${file.originalname}`;
       cb(null, uniqueKey);
     },
     acl: "private", // or 'public-read' if you want public access

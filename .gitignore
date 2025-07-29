@@ -6,7 +6,6 @@ insertSummaryWithPdf.js
 
 # Environment files
 .env
-.env.*
 
 # Logs
 npm-debug.log*
