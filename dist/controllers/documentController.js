@@ -68,13 +68,46 @@ exports.documentController = {
     async delete(req, res) {
         try {
             const query = { id: req.params.id };
-            const document = await Document_1.Document.findOneAndDelete(query);
+            const document = await Document_1.Document.findOne(query);
             if (!document) {
                 return res.status(404).json({ error: "Document not found" });
             }
-            res.json({ message: "Document deleted successfully" });
+            // Delete DRHP file from R2
+            if (document.fileKey) {
+                try {
+                    const deleteCommand = new client_s3_1.DeleteObjectCommand({
+                        Bucket: r2_1.R2_BUCKET,
+                        Key: document.fileKey,
+                    });
+                    await r2_1.r2Client.send(deleteCommand);
+                }
+                catch (err) {
+                    console.error("Failed to delete DRHP file from R2:", err);
+                }
+            }
+            // If DRHP has a related RHP, delete RHP file and document
+            if (document.relatedRhpId) {
+                const rhpDoc = await Document_1.Document.findOne({ id: document.relatedRhpId });
+                if (rhpDoc && rhpDoc.fileKey) {
+                    try {
+                        const deleteRhpCommand = new client_s3_1.DeleteObjectCommand({
+                            Bucket: r2_1.R2_BUCKET,
+                            Key: rhpDoc.fileKey,
+                        });
+                        await r2_1.r2Client.send(deleteRhpCommand);
+                    }
+                    catch (err) {
+                        console.error("Failed to delete RHP file from R2:", err);
+                    }
+                    await Document_1.Document.deleteOne({ id: document.relatedRhpId });
+                }
+            }
+            // Delete DRHP document from MongoDB
+            await Document_1.Document.deleteOne({ id: document.id });
+            res.json({ message: "Document and related files deleted successfully" });
         }
         catch (error) {
+            console.error("Error deleting document:", error);
             res.status(500).json({ error: "Failed to delete document" });
         }
     },
