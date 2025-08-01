@@ -73,7 +73,7 @@ export const documentController = {
         return res.status(404).json({ error: "Document not found" });
       }
 
-      // Delete DRHP file from R2
+      // Delete file from R2
       if (document.fileKey) {
         try {
           const deleteCommand = new DeleteObjectCommand({
@@ -82,31 +82,45 @@ export const documentController = {
           });
           await r2Client.send(deleteCommand);
         } catch (err) {
-          console.error("Failed to delete DRHP file from R2:", err);
+          console.error("Failed to delete file from R2:", err);
         }
       }
 
-      // If DRHP has a related RHP, delete RHP file and document
-      if (document.relatedRhpId) {
-        const rhpDoc = await Document.findOne({ id: document.relatedRhpId });
-        if (rhpDoc && rhpDoc.fileKey) {
-          try {
-            const deleteRhpCommand = new DeleteObjectCommand({
-              Bucket: R2_BUCKET,
-              Key: rhpDoc.fileKey,
-            });
-            await r2Client.send(deleteRhpCommand);
-          } catch (err) {
-            console.error("Failed to delete RHP file from R2:", err);
+      if (document.type === "DRHP") {
+        // If deleting a DRHP, also delete its related RHP
+        if (document.relatedRhpId) {
+          const rhpDoc = await Document.findOne({ id: document.relatedRhpId });
+          if (rhpDoc && rhpDoc.fileKey) {
+            try {
+              const deleteRhpCommand = new DeleteObjectCommand({
+                Bucket: R2_BUCKET,
+                Key: rhpDoc.fileKey,
+              });
+              await r2Client.send(deleteRhpCommand);
+            } catch (err) {
+              console.error("Failed to delete RHP file from R2:", err);
+            }
+            await Document.deleteOne({ id: document.relatedRhpId });
           }
-          await Document.deleteOne({ id: document.relatedRhpId });
         }
+        // Delete DRHP document from MongoDB
+        await Document.deleteOne({ id: document.id });
+        res.json({ message: "DRHP and related RHP deleted successfully" });
+      } else if (document.type === "RHP") {
+        // If deleting an RHP, remove the reference from the DRHP
+        const drhpDoc = await Document.findOne({ relatedRhpId: document.id });
+        if (drhpDoc) {
+          drhpDoc.relatedRhpId = undefined;
+          await drhpDoc.save();
+        }
+        // Delete RHP document from MongoDB
+        await Document.deleteOne({ id: document.id });
+        res.json({ message: "RHP deleted successfully" });
+      } else {
+        // Generic document deletion
+        await Document.deleteOne({ id: document.id });
+        res.json({ message: "Document deleted successfully" });
       }
-
-      // Delete DRHP document from MongoDB
-      await Document.deleteOne({ id: document.id });
-
-      res.json({ message: "Document and related files deleted successfully" });
     } catch (error) {
       console.error("Error deleting document:", error);
       res.status(500).json({ error: "Failed to delete document" });
