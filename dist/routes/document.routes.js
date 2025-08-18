@@ -26,7 +26,7 @@ const upload = (0, multer_1.default)({
         },
         acl: "private", // or 'public-read' if you want public access
     }),
-    limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
 });
 // Get all documents for current user
 router.get("/", documentController_1.documentController.getAll);
