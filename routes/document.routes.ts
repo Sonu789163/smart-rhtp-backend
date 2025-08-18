@@ -30,7 +30,7 @@ const upload = multer({
     },
     acl: "private", // or 'public-read' if you want public access
   }),
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
 });
 
 // Get all documents for current user
