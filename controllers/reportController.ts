@@ -109,7 +109,6 @@ export const reportController = {
       if (!jobId || !status) {
         return res.status(400).json({ message: "Missing jobId or status" });
       }
-      console.log("Emitting compare_status:", { jobId, status, error });
       // Emit real-time update
       io.emit("compare_status", { jobId, status, error });
       res

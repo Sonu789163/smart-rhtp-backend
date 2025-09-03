@@ -195,11 +195,9 @@ export const userController = {
   // User: Get own profile
   async getMyProfile(req: AuthRequest, res: Response) {
     try {
-      console.log("getMyProfile called, user:", req.user);
       const user = await User.findById(req.user._id).select(
         "-password -refreshTokens -resetPasswordToken -resetPasswordExpires"
       );
-      console.log("Found user:", user);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -213,9 +211,6 @@ export const userController = {
   // User: Update own profile
   async updateMyProfile(req: AuthRequest, res: Response) {
     try {
-      console.log("updateMyProfile called");
-      console.log("Request body:", req.body);
-      console.log("Request user:", req.user);
 
       const { name, phoneNumber, gender } = req.body;
       const updateData: any = {};
@@ -224,7 +219,6 @@ export const userController = {
       if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
       if (gender !== undefined) updateData.gender = gender;
 
-      console.log("Update data:", updateData);
 
       const user = await User.findByIdAndUpdate(req.user._id, updateData, {
         new: true,
@@ -232,7 +226,6 @@ export const userController = {
         "-password -refreshTokens -resetPasswordToken -resetPasswordExpires"
       );
 
-      console.log("Updated user:", user);
 
       if (!user) {
         return res.status(404).json({ message: "User not found" });

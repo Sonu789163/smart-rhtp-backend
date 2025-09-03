@@ -176,7 +176,6 @@ export const documentController = {
       form.append("documentId", document.id);
       form.append("namespace", document.name);
       form.append("name", document.name);
-      console.log("fromData", form);
 
       try {
         await axios.post(n8nWebhookUrl, form, {
@@ -272,7 +271,6 @@ export const documentController = {
       }
       // Only emit on failure
       if (status.trim().toLowerCase() === "failed") {
-        console.log("Emitting upload_status:", { jobId, status, error });
         io.emit("upload_status", { jobId, status, error });
       }
       res.status(200).json({

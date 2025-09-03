@@ -165,7 +165,6 @@ exports.chatController = {
             }
             // Only emit on failure
             if (status.trim().toLowerCase() === "failed") {
-                console.log("Emitting chat_status:", { jobId, status, error });
                 index_1.io.emit("chat_status", { jobId, status, error });
             }
             res.status(200).json({

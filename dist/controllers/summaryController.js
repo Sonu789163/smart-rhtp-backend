@@ -164,7 +164,6 @@ exports.summaryController = {
             if (!jobId || !status) {
                 return res.status(400).json({ message: "Missing jobId or status" });
             }
-            console.log("Emitting summary_status:", { jobId, status, error });
             // Emit real-time update
             index_1.io.emit("summary_status", { jobId, status, error });
             res
