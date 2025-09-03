@@ -14,5 +14,7 @@ const reportSchema = new mongoose_1.default.Schema({
     rhpId: { type: String, required: true },
     drhpNamespace: { type: String, required: true },
     rhpNamespace: { type: String, required: true },
+    microsoftId: { type: String },
+    userId: { type: String },
 });
 exports.Report = mongoose_1.default.model("Report", reportSchema);

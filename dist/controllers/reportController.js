@@ -68,6 +68,15 @@ exports.reportController = {
                 rhpNamespace,
                 updatedAt: new Date(),
             };
+            // Add user information if available
+            if (req.user) {
+                if (req.user.microsoftId) {
+                    reportData.microsoftId = req.user.microsoftId;
+                }
+                else if (req.user._id) {
+                    reportData.userId = req.user._id.toString();
+                }
+            }
             const report = new Report_1.Report(reportData);
             await report.save();
             res.status(201).json(report);

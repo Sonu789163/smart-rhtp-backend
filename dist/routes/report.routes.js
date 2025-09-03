@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const reportController_1 = require("../controllers/reportController");
 const auth_1 = require("../middleware/auth");
+const rateLimitByUser_1 = require("../middleware/rateLimitByUser");
 const router = express_1.default.Router();
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
@@ -13,8 +14,8 @@ router.use(auth_1.authMiddleware);
 router.get("/", reportController_1.reportController.getAll);
 // Get single report
 router.get("/:id", reportController_1.reportController.getById);
-// Create new report (webhook for n8n)
-router.post("/create-report", reportController_1.reportController.create);
+// Create new report (rate limited)
+router.post("/create-report", (0, rateLimitByUser_1.rateLimitByUser)("report:create", 20, 24 * 60 * 60 * 1000), reportController_1.reportController.create);
 // Update report
 router.put("/:id", reportController_1.reportController.update);
 // Delete report

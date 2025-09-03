@@ -95,8 +95,7 @@ router.get("/callback", async (req, res) => {
         user.refreshTokens.push(refreshToken);
         await user.save();
         // Redirect to frontend with both tokens
-        const frontendUrl = process.env.FRONTEND_URL ||
-            "http://localhost:8080";
+        const frontendUrl = process.env.FRONTEND_URL || "http://localhost:8080";
         res.redirect(`${frontendUrl}/auth-callback?token=${token}&refreshToken=${refreshToken}`);
     }
     catch (error) {

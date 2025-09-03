@@ -11,5 +11,7 @@ const summarySchema = new mongoose_1.default.Schema({
     content: { type: String, required: true },
     updatedAt: { type: Date, default: Date.now },
     documentId: { type: String, required: true },
+    microsoftId: { type: String },
+    userId: { type: String },
 });
 exports.Summary = mongoose_1.default.model("Summary", summarySchema);

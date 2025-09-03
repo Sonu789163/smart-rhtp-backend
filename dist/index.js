@@ -14,6 +14,7 @@ const chat_routes_1 = __importDefault(require("./routes/chat.routes"));
 const summary_routes_1 = __importDefault(require("./routes/summary.routes"));
 const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
 const report_routes_1 = __importDefault(require("./routes/report.routes"));
+const user_routes_1 = __importDefault(require("./routes/user.routes"));
 const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
 const helmet_1 = __importDefault(require("helmet"));
@@ -69,6 +70,7 @@ app.use("/api/documents", document_routes_1.default);
 app.use("/api/chats", chat_routes_1.default);
 app.use("/api/summaries", summary_routes_1.default);
 app.use("/api/reports", report_routes_1.default);
+app.use("/api/users", user_routes_1.default);
 // Health check endpoint
 app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });

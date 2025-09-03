@@ -1,6 +1,7 @@
 import express from "express";
 import { summaryController } from "../controllers/summaryController";
 import { authMiddleware } from "../middleware/auth";
+import { rateLimitByUser } from "../middleware/rateLimitByUser";
 
 const router = express.Router();
 
@@ -10,11 +11,27 @@ router.use(authMiddleware);
 // Get all summaries for the user
 router.get("/", summaryController.getAll);
 
+// Admin metrics: total summaries count
+router.get("/admin/metrics/count", async (req, res) => {
+  try {
+    const total = await (
+      await import("../models/Summary")
+    ).Summary.countDocuments({});
+    res.json({ total });
+  } catch (e) {
+    res.status(500).json({ message: "Failed to load summary count" });
+  }
+});
+
 // Get summaries for a document
 router.get("/document/:documentId", summaryController.getByDocumentId);
 
-// Create new summary
-router.post("/create", summaryController.create);
+// Create new summary (rate limited)
+router.post(
+  "/create",
+  rateLimitByUser("summary:create", 40, 24 * 60 * 60 * 1000),
+  summaryController.create
+);
 
 // Update summary
 router.put("/:id", summaryController.update);

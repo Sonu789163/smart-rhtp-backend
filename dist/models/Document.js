@@ -16,5 +16,7 @@ const documentSchema = new mongoose_1.default.Schema({
     type: { type: String, enum: ["DRHP", "RHP"], required: true }, // distinguish between DRHP and RHP
     relatedDrhpId: { type: String }, // for RHP to link to DRHP (using string IDs)
     relatedRhpId: { type: String }, // for DRHP to link to RHP (using string IDs)
+    microsoftId: { type: String },
+    userId: { type: String },
 });
 exports.Document = mongoose_1.default.model("Document", documentSchema);

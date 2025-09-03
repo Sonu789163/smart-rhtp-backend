@@ -45,7 +45,7 @@ export const reportController = {
     }
   },
 
-  async create(req: Request, res: Response) {
+  async create(req: AuthRequest, res: Response) {
     try {
       const { title, content, drhpId, rhpId, drhpNamespace, rhpNamespace } =
         req.body;
@@ -81,6 +81,15 @@ export const reportController = {
         rhpNamespace,
         updatedAt: new Date(),
       };
+
+      // Add user information if available
+      if (req.user) {
+        if (req.user.microsoftId) {
+          reportData.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          reportData.userId = req.user._id.toString();
+        }
+      }
 
       const report = new Report(reportData);
       await report.save();

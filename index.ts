@@ -8,6 +8,7 @@ import chatRoutes from "./routes/chat.routes";
 import summaryRoutes from "./routes/summary.routes";
 import authRoutes from "./routes/auth.routes";
 import reportRoutes from "./routes/report.routes";
+import userRoutes from "./routes/user.routes";
 import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import helmet from "helmet";
@@ -77,6 +78,7 @@ app.use("/api/documents", documentRoutes);
 app.use("/api/chats", chatRoutes);
 app.use("/api/summaries", summaryRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/users", userRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {

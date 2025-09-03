@@ -8,6 +8,7 @@ const documentController_1 = require("../controllers/documentController");
 const auth_1 = require("../middleware/auth");
 const multer_1 = __importDefault(require("multer"));
 const r2_1 = require("../config/r2");
+const rateLimitByUser_1 = require("../middleware/rateLimitByUser");
 const multer_s3_1 = __importDefault(require("multer-s3"));
 const router = express_1.default.Router();
 // POST /upload-status/update (for n8n to notify upload status)
@@ -37,7 +38,7 @@ router.get("/:id", documentController_1.documentController.getById);
 // Create document
 router.post("/", documentController_1.documentController.create);
 // Upload PDF document
-router.post("/upload", upload.single("file"), 
+router.post("/upload", (0, auth_1.authorize)(["admin"]), (0, rateLimitByUser_1.rateLimitByUser)("document:upload", 20, 24 * 60 * 60 * 1000), upload.single("file"), 
 // @ts-ignore
 function (err, req, res, next) {
     if (err && err.code === "LIMIT_FILE_SIZE") {
@@ -48,12 +49,12 @@ function (err, req, res, next) {
     next(err);
 }, documentController_1.documentController.uploadDocument);
 // Upload RHP document
-router.post("/upload-rhp", upload.single("file"), // @ts-ignore
+router.post("/upload-rhp", (0, auth_1.authorize)(["admin"]), (0, rateLimitByUser_1.rateLimitByUser)("document:upload", 20, 24 * 60 * 60 * 1000), upload.single("file"), // @ts-ignore
 documentController_1.documentController.uploadRhp);
 // Download/view PDF document
 router.get("/download/:id", documentController_1.documentController.downloadDocument);
 // Update document
 router.put("/:id", documentController_1.documentController.update);
 // Delete document
-router.delete("/:id", documentController_1.documentController.delete);
+router.delete("/:id", (0, auth_1.authorize)(["admin"]), documentController_1.documentController.delete);
 exports.default = router;

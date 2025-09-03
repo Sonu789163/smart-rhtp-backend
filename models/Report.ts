@@ -9,6 +9,8 @@ const reportSchema = new mongoose.Schema({
   rhpId: { type: String, required: true },
   drhpNamespace: { type: String, required: true },
   rhpNamespace: { type: String, required: true },
+  microsoftId: { type: String },
+  userId: { type: String },
 });
 
 export const Report = mongoose.model("Report", reportSchema);

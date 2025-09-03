@@ -13,7 +13,14 @@ interface AuthRequest extends Request {
 export const documentController = {
   async getAll(req: Request, res: Response) {
     try {
-      const query: any = { type: "DRHP" };
+      // Admins can view all documents, regular users should only view their accessible set.
+      // Current schema doesn't store uploader; until added, return all for now.
+      // If a type filter is provided, use it; otherwise return all.
+      const { type } = (req.query || {}) as { type?: string };
+      const query: any = {};
+      if (type === "DRHP" || type === "RHP") {
+        query.type = type;
+      }
       const documents = await Document.find(query).sort({ uploadedAt: -1 });
       res.json(documents);
     } catch (error) {
@@ -143,13 +150,11 @@ export const documentController = {
         namespace: req.body.namespace || originalname,
         type: "DRHP", // Set type for DRHP documents
       };
-      // if (user?.microsoftId) {
-      //   docData.microsoftId = user.microsoftId;
-      // } else if (user?._id) {
-      //   docData.userId = user._id.toString();
-      // } else {
-      //   return res.status(400).json({ error: "No user identifier found" });
-      // }
+      if (user?.microsoftId) {
+        docData.microsoftId = user.microsoftId;
+      } else if (user?._id) {
+        docData.userId = user._id.toString();
+      }
       const document = new Document(docData);
       await document.save();
 
@@ -196,9 +201,13 @@ export const documentController = {
       if (!document || !document.fileKey) {
         return res.status(404).json({ error: "Document not found or no file" });
       }
+      const inline = (req.query.inline as string) === "1";
       res.set({
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename=\"${document.name}\"`,
+        "Content-Disposition": `${
+          inline ? "inline" : "attachment"
+        }; filename=\"${document.name}\"`,
+        "Cache-Control": "private, max-age=60",
       });
       const getObjectCommand = new GetObjectCommand({
         Bucket: R2_BUCKET,
@@ -290,12 +299,12 @@ export const documentController = {
       if (!drhp) return res.status(404).json({ error: "DRHP not found" });
 
       const fileKey = (req.file as any).key;
-      // const user = (req as any).user;
+      const user = (req as any).user;
 
       // Create RHP namespace by appending "-rhp" to the DRHP namespace
       const rhpNamespace = req.file.originalname;
 
-      const rhpDoc = new Document({
+      const rhpDocData: any = {
         id: fileKey,
         fileKey: fileKey,
         name: drhp.name,
@@ -303,7 +312,16 @@ export const documentController = {
         rhpNamespace: rhpNamespace,
         type: "RHP",
         relatedDrhpId: drhp.id,
-      });
+      };
+
+      // Add user information if available
+      if (user?.microsoftId) {
+        rhpDocData.microsoftId = user.microsoftId;
+      } else if (user?._id) {
+        rhpDocData.userId = user._id.toString();
+      }
+
+      const rhpDoc = new Document(rhpDocData);
       await rhpDoc.save();
 
       drhp.relatedRhpId = rhpDoc.id;

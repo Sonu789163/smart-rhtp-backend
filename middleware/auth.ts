@@ -34,9 +34,26 @@ export const authMiddleware = async (
       return res.status(401).json({ message: "Token is not valid" });
     }
 
+    if (user.status === "suspended") {
+      return res.status(403).json({ message: "Account is suspended" });
+    }
+
     req.user = user;
     next();
   } catch (error) {
     res.status(401).json({ message: "Token is not valid" });
   }
+};
+
+export const authorize = (roles: Array<"admin" | "user">) => {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    const currentUser = req.user;
+    if (!currentUser) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    if (!roles.includes(currentUser.role)) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+    next();
+  };
 };

@@ -53,6 +53,15 @@ exports.summaryController = {
                 documentId,
                 updatedAt: new Date(),
             };
+            // Add user information if available
+            if (req.user) {
+                if (req.user.microsoftId) {
+                    summaryData.microsoftId = req.user.microsoftId;
+                }
+                else if (req.user._id) {
+                    summaryData.userId = req.user._id.toString();
+                }
+            }
             const summary = new Summary_1.Summary(summaryData);
             await summary.save();
             res.status(201).json(summary);

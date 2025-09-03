@@ -178,4 +178,80 @@ export const chatController = {
       });
     }
   },
+
+  // Admin: Get all chats (no user filtering)
+  async getAllAdmin(req: Request, res: Response) {
+    try {
+      const chats = await Chat.find({}).sort({ updatedAt: -1 });
+      res.json(chats);
+    } catch (error) {
+      console.error("Error fetching all chats:", error);
+      res.status(500).json({ error: "Failed to fetch chats" });
+    }
+  },
+
+  // Admin: Get chat statistics
+  async getStats(req: Request, res: Response) {
+    try {
+      const totalChats = await Chat.countDocuments({});
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const chatsToday = await Chat.countDocuments({
+        createdAt: { $gte: today },
+      });
+
+      const thisWeek = new Date();
+      thisWeek.setDate(thisWeek.getDate() - 7);
+      const chatsThisWeek = await Chat.countDocuments({
+        createdAt: { $gte: thisWeek },
+      });
+
+      const thisMonth = new Date();
+      thisMonth.setMonth(thisMonth.getMonth() - 1);
+      const chatsThisMonth = await Chat.countDocuments({
+        createdAt: { $gte: thisMonth },
+      });
+
+      // Get top documents by chat count
+      const topDocuments = await Chat.aggregate([
+        {
+          $group: {
+            _id: "$documentId",
+            chatCount: { $sum: 1 },
+          },
+        },
+        {
+          $sort: { chatCount: -1 },
+        },
+        {
+          $limit: 10,
+        },
+      ]);
+
+      res.json({
+        totalChats,
+        chatsToday,
+        chatsThisWeek,
+        chatsThisMonth,
+        topDocuments,
+      });
+    } catch (error) {
+      console.error("Error fetching chat stats:", error);
+      res.status(500).json({ error: "Failed to fetch chat statistics" });
+    }
+  },
+
+  // Admin: Delete any chat by id (bypass ownership)
+  async deleteAnyAdmin(req: Request, res: Response) {
+    try {
+      const chat = await Chat.findOneAndDelete({ id: req.params.id });
+      if (!chat) {
+        return res.status(404).json({ error: "Chat not found" });
+      }
+      res.json({ message: "Chat deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting chat:", error);
+      res.status(500).json({ error: "Failed to delete chat" });
+    }
+  },
 };

@@ -13,7 +13,14 @@ const client_s3_1 = require("@aws-sdk/client-s3");
 exports.documentController = {
     async getAll(req, res) {
         try {
-            const query = { type: "DRHP" };
+            // Admins can view all documents, regular users should only view their accessible set.
+            // Current schema doesn't store uploader; until added, return all for now.
+            // If a type filter is provided, use it; otherwise return all.
+            const { type } = (req.query || {});
+            const query = {};
+            if (type === "DRHP" || type === "RHP") {
+                query.type = type;
+            }
             const documents = await Document_1.Document.find(query).sort({ uploadedAt: -1 });
             res.json(documents);
         }
@@ -145,13 +152,12 @@ exports.documentController = {
                 namespace: req.body.namespace || originalname,
                 type: "DRHP", // Set type for DRHP documents
             };
-            // if (user?.microsoftId) {
-            //   docData.microsoftId = user.microsoftId;
-            // } else if (user?._id) {
-            //   docData.userId = user._id.toString();
-            // } else {
-            //   return res.status(400).json({ error: "No user identifier found" });
-            // }
+            if (user === null || user === void 0 ? void 0 : user.microsoftId) {
+                docData.microsoftId = user.microsoftId;
+            }
+            else if (user === null || user === void 0 ? void 0 : user._id) {
+                docData.userId = user._id.toString();
+            }
             const document = new Document_1.Document(docData);
             await document.save();
             // Notify n8n for further processing
@@ -194,9 +200,11 @@ exports.documentController = {
             if (!document || !document.fileKey) {
                 return res.status(404).json({ error: "Document not found or no file" });
             }
+            const inline = req.query.inline === "1";
             res.set({
                 "Content-Type": "application/pdf",
-                "Content-Disposition": `attachment; filename=\"${document.name}\"`,
+                "Content-Disposition": `${inline ? "inline" : "attachment"}; filename=\"${document.name}\"`,
+                "Cache-Control": "private, max-age=60",
             });
             const getObjectCommand = new client_s3_1.GetObjectCommand({
                 Bucket: r2_1.R2_BUCKET,
@@ -288,10 +296,10 @@ exports.documentController = {
             if (!drhp)
                 return res.status(404).json({ error: "DRHP not found" });
             const fileKey = req.file.key;
-            // const user = (req as any).user;
+            const user = req.user;
             // Create RHP namespace by appending "-rhp" to the DRHP namespace
             const rhpNamespace = req.file.originalname;
-            const rhpDoc = new Document_1.Document({
+            const rhpDocData = {
                 id: fileKey,
                 fileKey: fileKey,
                 name: drhp.name,
@@ -299,7 +307,15 @@ exports.documentController = {
                 rhpNamespace: rhpNamespace,
                 type: "RHP",
                 relatedDrhpId: drhp.id,
-            });
+            };
+            // Add user information if available
+            if (user === null || user === void 0 ? void 0 : user.microsoftId) {
+                rhpDocData.microsoftId = user.microsoftId;
+            }
+            else if (user === null || user === void 0 ? void 0 : user._id) {
+                rhpDocData.userId = user._id.toString();
+            }
+            const rhpDoc = new Document_1.Document(rhpDocData);
             await rhpDoc.save();
             drhp.relatedRhpId = rhpDoc.id;
             await drhp.save();

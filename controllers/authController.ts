@@ -4,16 +4,17 @@ import jwt from "jsonwebtoken";
 import { User } from "../models/User";
 import nodemailer from "nodemailer";
 import crypto from "crypto";
+import { validateEmail, getPrimaryDomain } from "../config/domainConfig";
 
 // Helper to generate tokens
 const generateTokens = async (user: any) => {
   const accessToken = jwt.sign(
-    { userId: user._id, email: user.email },
+    { userId: user._id, email: user.email, role: user.role },
     process.env.JWT_SECRET!,
     { expiresIn: "1d" }
   );
   const refreshToken = jwt.sign(
-    { userId: user._id, email: user.email },
+    { userId: user._id, email: user.email, role: user.role },
     process.env.JWT_REFRESH_SECRET!,
     { expiresIn: "7d" }
   );
@@ -31,20 +32,53 @@ const generateTokens = async (user: any) => {
 export const authController = {
   // Register a new user
   async register(req: Request, res: Response) {
-    const { email, password } = req.body;
+    const { email, password, name } = req.body;
     try {
+      // Validate email format and domain
+      const emailValidation = validateEmail(email);
+      if (!emailValidation.isValid) {
+        return res.status(400).json({ message: emailValidation.error });
+      }
+
+      // Check if user already exists
       let user = await User.findOne({ email });
       if (user) {
         return res.status(400).json({ message: "User already exists" });
       }
 
+      // Get the primary domain from email
+      const domain = getPrimaryDomain(email);
+      if (!domain) {
+        return res.status(400).json({ message: "Invalid domain" });
+      }
+
+      // Check if this is the first user in the domain (will become admin)
+      const isFirstUserInDomain = (await User.countDocuments({ domain })) === 0;
+      const role = isFirstUserInDomain ? "admin" : "user";
+
       const hashedPassword = await bcrypt.hash(password, 10);
-      user = new User({ email, password: hashedPassword });
+      user = new User({
+        email,
+        domain,
+        password: hashedPassword,
+        name: name || email.split("@")[0], // Use email prefix as name if not provided
+        role: role, // Make sure role is set
+      });
+
       await user.save();
 
       const tokens = await generateTokens(user);
-      res.status(201).json(tokens);
+      res.status(201).json({
+        ...tokens,
+        user: {
+          userId: user._id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+        },
+      });
     } catch (error) {
+      console.error("Registration error:", error);
       res.status(500).json({ message: "Server error" });
     }
   },
@@ -88,7 +122,7 @@ export const authController = {
       }
 
       const accessToken = jwt.sign(
-        { userId: user._id, email: user.email },
+        { userId: user._id, email: user.email, role: user.role },
         process.env.JWT_SECRET!,
         { expiresIn: "1d" }
       );

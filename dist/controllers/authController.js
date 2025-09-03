@@ -9,10 +9,11 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const User_1 = require("../models/User");
 const nodemailer_1 = __importDefault(require("nodemailer"));
 const crypto_1 = __importDefault(require("crypto"));
+const domainConfig_1 = require("../config/domainConfig");
 // Helper to generate tokens
 const generateTokens = async (user) => {
-    const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "1d" });
-    const refreshToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
+    const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
+    const refreshToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email, role: user.role }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
     // Store refresh token
     if (!user.refreshTokens) {
         user.refreshTokens = [];
@@ -24,19 +25,48 @@ const generateTokens = async (user) => {
 exports.authController = {
     // Register a new user
     async register(req, res) {
-        const { email, password } = req.body;
+        const { email, password, name } = req.body;
         try {
+            // Validate email format and domain
+            const emailValidation = (0, domainConfig_1.validateEmail)(email);
+            if (!emailValidation.isValid) {
+                return res.status(400).json({ message: emailValidation.error });
+            }
+            // Check if user already exists
             let user = await User_1.User.findOne({ email });
             if (user) {
                 return res.status(400).json({ message: "User already exists" });
             }
+            // Get the primary domain from email
+            const domain = (0, domainConfig_1.getPrimaryDomain)(email);
+            if (!domain) {
+                return res.status(400).json({ message: "Invalid domain" });
+            }
+            // Check if this is the first user in the domain (will become admin)
+            const isFirstUserInDomain = (await User_1.User.countDocuments({ domain })) === 0;
+            const role = isFirstUserInDomain ? "admin" : "user";
             const hashedPassword = await bcryptjs_1.default.hash(password, 10);
-            user = new User_1.User({ email, password: hashedPassword });
+            user = new User_1.User({
+                email,
+                domain,
+                password: hashedPassword,
+                name: name || email.split("@")[0], // Use email prefix as name if not provided
+                role: role, // Make sure role is set
+            });
             await user.save();
             const tokens = await generateTokens(user);
-            res.status(201).json(tokens);
+            res.status(201).json({
+                ...tokens,
+                user: {
+                    userId: user._id,
+                    email: user.email,
+                    name: user.name,
+                    role: user.role,
+                },
+            });
         }
         catch (error) {
+            console.error("Registration error:", error);
             res.status(500).json({ message: "Server error" });
         }
     },
@@ -73,7 +103,7 @@ exports.authController = {
             if (!user || !user.refreshTokens.includes(token)) {
                 return res.status(403).json({ message: "Invalid refresh token" });
             }
-            const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "1d" });
+            const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
             res.json({ accessToken });
         }
         catch (error) {

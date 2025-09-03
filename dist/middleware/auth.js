@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.authMiddleware = void 0;
+exports.authorize = exports.authMiddleware = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const User_1 = require("../models/User");
 const authMiddleware = async (req, res, next) => {
@@ -27,6 +27,9 @@ const authMiddleware = async (req, res, next) => {
         if (!user) {
             return res.status(401).json({ message: "Token is not valid" });
         }
+        if (user.status === "suspended") {
+            return res.status(403).json({ message: "Account is suspended" });
+        }
         req.user = user;
         next();
     }
@@ -35,3 +38,16 @@ const authMiddleware = async (req, res, next) => {
     }
 };
 exports.authMiddleware = authMiddleware;
+const authorize = (roles) => {
+    return (req, res, next) => {
+        const currentUser = req.user;
+        if (!currentUser) {
+            return res.status(401).json({ message: "Unauthorized" });
+        }
+        if (!roles.includes(currentUser.role)) {
+            return res.status(403).json({ message: "Forbidden" });
+        }
+        next();
+    };
+};
+exports.authorize = authorize;

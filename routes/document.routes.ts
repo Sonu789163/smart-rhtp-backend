@@ -1,9 +1,10 @@
 import express from "express";
 import { documentController } from "../controllers/documentController";
-import { authMiddleware } from "../middleware/auth";
+import { authMiddleware, authorize } from "../middleware/auth";
 import multer from "multer";
 import { Request, Response, NextFunction } from "express";
 import { r2Client, R2_BUCKET } from "../config/r2";
+import { rateLimitByUser } from "../middleware/rateLimitByUser";
 import multerS3 from "multer-s3";
 
 const router = express.Router();
@@ -48,6 +49,8 @@ router.post("/", documentController.create);
 // Upload PDF document
 router.post(
   "/upload",
+  authorize(["admin"]),
+  rateLimitByUser("document:upload", 20, 24 * 60 * 60 * 1000),
   upload.single("file"),
   // @ts-ignore
   function (err: any, req: Request, res: Response, next: NextFunction) {
@@ -64,6 +67,8 @@ router.post(
 // Upload RHP document
 router.post(
   "/upload-rhp",
+  authorize(["admin"]),
+  rateLimitByUser("document:upload", 20, 24 * 60 * 60 * 1000),
   upload.single("file"), // @ts-ignore
   documentController.uploadRhp
 );
@@ -75,6 +80,6 @@ router.get("/download/:id", documentController.downloadDocument);
 router.put("/:id", documentController.update);
 
 // Delete document
-router.delete("/:id", documentController.delete);
+router.delete("/:id", authorize(["admin"]), documentController.delete);
 
 export default router;

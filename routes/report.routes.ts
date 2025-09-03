@@ -1,6 +1,7 @@
 import express from "express";
 import { reportController } from "../controllers/reportController";
 import { authMiddleware } from "../middleware/auth";
+import { rateLimitByUser } from "../middleware/rateLimitByUser";
 
 const router = express.Router();
 
@@ -13,8 +14,12 @@ router.get("/", reportController.getAll);
 // Get single report
 router.get("/:id", reportController.getById);
 
-// Create new report (webhook for n8n)
-router.post("/create-report", reportController.create);
+// Create new report (rate limited)
+router.post(
+  "/create-report",
+  rateLimitByUser("report:create", 20, 24 * 60 * 60 * 1000),
+  reportController.create
+);
 
 // Update report
 router.put("/:id", reportController.update);

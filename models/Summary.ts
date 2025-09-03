@@ -6,6 +6,8 @@ const summarySchema = new mongoose.Schema({
   content: { type: String, required: true },
   updatedAt: { type: Date, default: Date.now },
   documentId: { type: String, required: true },
+  microsoftId: { type: String },
+  userId: { type: String },
 });
 
 export const Summary = mongoose.model("Summary", summarySchema);
