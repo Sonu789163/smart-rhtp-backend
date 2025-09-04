@@ -1,12 +1,15 @@
 import express from "express";
 import { chatController } from "../controllers/chatController";
 import { authMiddleware, authorize } from "../middleware/auth";
+import { domainAuthMiddleware } from "../middleware/domainAuth";
 import { rateLimitByUser } from "../middleware/rateLimitByUser";
 
 const router = express.Router();
 
 // Apply auth middleware to all routes
 router.use(authMiddleware);
+// Apply domain middleware to all routes
+router.use(domainAuthMiddleware);
 
 // Get all chats for the user
 router.get("/", chatController.getAll);

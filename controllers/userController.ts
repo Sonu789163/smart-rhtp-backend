@@ -4,6 +4,7 @@ import { User } from "../models/User";
 
 interface AuthRequest extends Request {
   user?: any;
+  userDomain?: string;
 }
 
 export const userController = {
@@ -18,7 +19,7 @@ export const userController = {
         status = "",
       } = req.query;
 
-      const query: any = {};
+      const query: any = { domain: req.user?.domain };
 
       // Search by email or name
       if (search) {
@@ -67,7 +68,10 @@ export const userController = {
   // Admin: Get single user by ID
   async getUserById(req: AuthRequest, res: Response) {
     try {
-      const user = await User.findById(req.params.id).select(
+      const user = await User.findOne({
+        _id: req.params.id,
+        domain: req.user?.domain,
+      }).select(
         "-password -refreshTokens -resetPasswordToken -resetPasswordExpires"
       );
       if (!user) {
@@ -103,6 +107,7 @@ export const userController = {
         password: hashedPassword,
         role,
         status: "active",
+        domain: req.user?.domain,
       });
 
       await user.save();
@@ -134,9 +139,11 @@ export const userController = {
       if (role !== undefined) updateData.role = role;
       if (status !== undefined) updateData.status = status;
 
-      const user = await User.findByIdAndUpdate(req.params.id, updateData, {
-        new: true,
-      }).select(
+      const user = await User.findOneAndUpdate(
+        { _id: req.params.id, domain: req.user?.domain },
+        updateData,
+        { new: true }
+      ).select(
         "-password -refreshTokens -resetPasswordToken -resetPasswordExpires"
       );
 
@@ -154,7 +161,10 @@ export const userController = {
   // Admin: Delete user (soft delete by setting status to suspended)
   async deleteUser(req: AuthRequest, res: Response) {
     try {
-      const user = await User.findById(req.params.id);
+      const user = await User.findOne({
+        _id: req.params.id,
+        domain: req.user?.domain,
+      });
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -173,8 +183,8 @@ export const userController = {
   // Admin: Activate/Reactivate user
   async activateUser(req: AuthRequest, res: Response) {
     try {
-      const user = await User.findByIdAndUpdate(
-        req.params.id,
+      const user = await User.findOneAndUpdate(
+        { _id: req.params.id, domain: req.user?.domain },
         { status: "active" },
         { new: true }
       ).select(
@@ -211,7 +221,6 @@ export const userController = {
   // User: Update own profile
   async updateMyProfile(req: AuthRequest, res: Response) {
     try {
-
       const { name, phoneNumber, gender } = req.body;
       const updateData: any = {};
 
@@ -219,13 +228,11 @@ export const userController = {
       if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
       if (gender !== undefined) updateData.gender = gender;
 
-
       const user = await User.findByIdAndUpdate(req.user._id, updateData, {
         new: true,
       }).select(
         "-password -refreshTokens -resetPasswordToken -resetPasswordExpires"
       );
-
 
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -277,11 +284,18 @@ export const userController = {
   // Admin: Get user statistics
   async getUserStats(req: AuthRequest, res: Response) {
     try {
-      const totalUsers = await User.countDocuments();
-      const activeUsers = await User.countDocuments({ status: "active" });
-      const suspendedUsers = await User.countDocuments({ status: "suspended" });
-      const adminUsers = await User.countDocuments({ role: "admin" });
-      const regularUsers = await User.countDocuments({ role: "user" });
+      const domain = req.user?.domain;
+      const totalUsers = await User.countDocuments({ domain });
+      const activeUsers = await User.countDocuments({
+        status: "active",
+        domain,
+      });
+      const suspendedUsers = await User.countDocuments({
+        status: "suspended",
+        domain,
+      });
+      const adminUsers = await User.countDocuments({ role: "admin", domain });
+      const regularUsers = await User.countDocuments({ role: "user", domain });
 
       res.json({
         total: totalUsers,

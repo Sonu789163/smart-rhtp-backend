@@ -16,7 +16,17 @@ const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.summaryController = {
     async getAll(req, res) {
         try {
-            const summaries = await Summary_1.Summary.find({}).sort({ updatedAt: -1 });
+            const query = { domain: req.userDomain }; // Filter by user's domain
+            // Admins can see all summaries in their domain, regular users see only their own
+            if (req.user.role !== "admin") {
+                if (req.user.microsoftId) {
+                    query.microsoftId = req.user.microsoftId;
+                }
+                else if (req.user._id) {
+                    query.userId = req.user._id.toString();
+                }
+            }
+            const summaries = await Summary_1.Summary.find(query).sort({ updatedAt: -1 });
             res.json(summaries);
         }
         catch (error) {
@@ -27,7 +37,20 @@ exports.summaryController = {
     async getByDocumentId(req, res) {
         try {
             const { documentId } = req.params;
-            const summaries = await Summary_1.Summary.find({ documentId }).sort({
+            const query = {
+                documentId,
+                domain: req.userDomain, // Filter by user's domain
+            };
+            // Admins can see all summaries in their domain, regular users see only their own
+            if (req.user.role !== "admin") {
+                if (req.user.microsoftId) {
+                    query.microsoftId = req.user.microsoftId;
+                }
+                else if (req.user._id) {
+                    query.userId = req.user._id.toString();
+                }
+            }
+            const summaries = await Summary_1.Summary.find(query).sort({
                 updatedAt: -1,
             });
             res.json(summaries);
@@ -51,6 +74,7 @@ exports.summaryController = {
                 title,
                 content,
                 documentId,
+                domain: req.userDomain, // Add domain for workspace isolation
                 updatedAt: new Date(),
             };
             // Add user information if available
@@ -106,15 +130,21 @@ exports.summaryController = {
     async update(req, res) {
         try {
             const { id } = req.params;
-            const query = { id };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
+            const query = {
+                id,
+                domain: req.userDomain, // Ensure user can only update summaries from their domain
+            };
+            // Admins can update all summaries in their domain, regular users see only their own
+            if (req.user.role !== "admin") {
+                if (req.user.microsoftId) {
+                    query.microsoftId = req.user.microsoftId;
+                }
+                else if (req.user._id) {
+                    query.userId = req.user._id.toString();
+                }
+                else {
+                    return res.status(400).json({ error: "No user identifier found" });
+                }
             }
             const summary = await Summary_1.Summary.findOneAndUpdate(query, req.body, {
                 new: true,
@@ -136,15 +166,21 @@ exports.summaryController = {
     async delete(req, res) {
         try {
             const { id } = req.params;
-            const query = { id };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
+            const query = {
+                id,
+                domain: req.userDomain, // Ensure user can only delete summaries from their domain
+            };
+            // Admins can delete all summaries in their domain, regular users see only their own
+            if (req.user.role !== "admin") {
+                if (req.user.microsoftId) {
+                    query.microsoftId = req.user.microsoftId;
+                }
+                else if (req.user._id) {
+                    query.userId = req.user._id.toString();
+                }
+                else {
+                    return res.status(400).json({ error: "No user identifier found" });
+                }
             }
             const summary = await Summary_1.Summary.findOneAndDelete(query).lean();
             res.json({ message: "Summary deleted successfully" });

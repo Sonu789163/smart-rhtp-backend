@@ -1,6 +1,7 @@
 import express from "express";
 import { documentController } from "../controllers/documentController";
 import { authMiddleware, authorize } from "../middleware/auth";
+import { domainAuthMiddleware } from "../middleware/domainAuth";
 import multer from "multer";
 import { Request, Response, NextFunction } from "express";
 import { r2Client, R2_BUCKET } from "../config/r2";
@@ -14,6 +15,8 @@ router.post("/upload-status/update", documentController.uploadStatusUpdate);
 
 // Apply auth middleware to all routes
 router.use(authMiddleware);
+// Apply domain middleware to all routes
+router.use(domainAuthMiddleware);
 
 const upload = multer({
   storage: multerS3({

@@ -19,12 +19,24 @@ const execAsync = promisify(exec);
 
 interface AuthRequest extends Request {
   user?: any;
+  userDomain?: string;
 }
 
 export const reportController = {
-  async getAll(req: Request, res: Response) {
+  async getAll(req: AuthRequest, res: Response) {
     try {
-      const reports = await Report.find({}).sort({ updatedAt: -1 });
+      const query: any = { domain: req.userDomain }; // Filter by user's domain
+
+      // Admins can see all reports in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        }
+      }
+
+      const reports = await Report.find(query).sort({ updatedAt: -1 });
       res.json(reports);
     } catch (error) {
       console.error("Error fetching reports:", error);
@@ -32,9 +44,14 @@ export const reportController = {
     }
   },
 
-  async getById(req: Request, res: Response) {
+  async getById(req: AuthRequest, res: Response) {
     try {
-      const report = await Report.findOne({ id: req.params.id });
+      const query: any = {
+        id: req.params.id,
+        domain: req.userDomain, // Ensure user can only access reports from their domain
+      };
+
+      const report = await Report.findOne(query);
       if (!report) {
         return res.status(404).json({ error: "Report not found" });
       }
@@ -79,6 +96,7 @@ export const reportController = {
         rhpId,
         drhpNamespace,
         rhpNamespace,
+        domain: req.userDomain, // Add domain for workspace isolation
         updatedAt: new Date(),
       };
 
@@ -163,13 +181,20 @@ export const reportController = {
   async update(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const query: any = { id };
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
+      const query: any = {
+        id,
+        domain: req.userDomain, // Ensure user can only update reports from their domain
+      };
+
+      // Admins can update all reports in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        } else {
+          return res.status(400).json({ error: "No user identifier found" });
+        }
       }
 
       const report = await Report.findOneAndUpdate(query, req.body, {
@@ -187,13 +212,20 @@ export const reportController = {
 
   async delete(req: AuthRequest, res: Response) {
     try {
-      const query: any = { id: req.params.id };
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
+      const query: any = {
+        id: req.params.id,
+        domain: req.userDomain, // Ensure user can only delete reports from their domain
+      };
+
+      // Admins can delete all reports in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        } else {
+          return res.status(400).json({ error: "No user identifier found" });
+        }
       }
 
       const report = await Report.findOne(query);

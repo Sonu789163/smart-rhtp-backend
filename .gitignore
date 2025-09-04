@@ -3,6 +3,10 @@ node_modules/
 
 #code file 
 insertSummaryWithPdf.js
+removeUserFields.js
+scripts/migrateToDomainSeparation.js
+scripts/migrateToDomainSeparation.ts
+scripts/seedAdmin.js
 
 # Environment files
 .env

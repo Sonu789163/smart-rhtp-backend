@@ -9,12 +9,22 @@ import { validateEmail, getPrimaryDomain } from "../config/domainConfig";
 // Helper to generate tokens
 const generateTokens = async (user: any) => {
   const accessToken = jwt.sign(
-    { userId: user._id, email: user.email, role: user.role },
+    {
+      userId: user._id,
+      email: user.email,
+      role: user.role,
+      domain: user.domain,
+    },
     process.env.JWT_SECRET!,
     { expiresIn: "1d" }
   );
   const refreshToken = jwt.sign(
-    { userId: user._id, email: user.email, role: user.role },
+    {
+      userId: user._id,
+      email: user.email,
+      role: user.role,
+      domain: user.domain,
+    },
     process.env.JWT_REFRESH_SECRET!,
     { expiresIn: "7d" }
   );

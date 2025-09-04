@@ -6,10 +6,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const chatController_1 = require("../controllers/chatController");
 const auth_1 = require("../middleware/auth");
+const domainAuth_1 = require("../middleware/domainAuth");
 const rateLimitByUser_1 = require("../middleware/rateLimitByUser");
 const router = express_1.default.Router();
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
+// Apply domain middleware to all routes
+router.use(domainAuth_1.domainAuthMiddleware);
 // Get all chats for the user
 router.get("/", chatController_1.chatController.getAll);
 // Admin: Get all chats

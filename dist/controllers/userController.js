@@ -9,9 +9,10 @@ const User_1 = require("../models/User");
 exports.userController = {
     // Admin: Get all users with pagination, search, and filters
     async getAllUsers(req, res) {
+        var _a;
         try {
             const { page = 1, limit = 20, search = "", role = "", status = "", } = req.query;
-            const query = {};
+            const query = { domain: (_a = req.user) === null || _a === void 0 ? void 0 : _a.domain };
             // Search by email or name
             if (search) {
                 query.$or = [
@@ -51,8 +52,12 @@ exports.userController = {
     },
     // Admin: Get single user by ID
     async getUserById(req, res) {
+        var _a;
         try {
-            const user = await User_1.User.findById(req.params.id).select("-password -refreshTokens -resetPasswordToken -resetPasswordExpires");
+            const user = await User_1.User.findOne({
+                _id: req.params.id,
+                domain: (_a = req.user) === null || _a === void 0 ? void 0 : _a.domain,
+            }).select("-password -refreshTokens -resetPasswordToken -resetPasswordExpires");
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }
@@ -65,6 +70,7 @@ exports.userController = {
     },
     // Admin: Create new user
     async createUser(req, res) {
+        var _a;
         try {
             const { email, name, password, role = "user" } = req.body;
             // Check if user already exists
@@ -83,6 +89,7 @@ exports.userController = {
                 password: hashedPassword,
                 role,
                 status: "active",
+                domain: (_a = req.user) === null || _a === void 0 ? void 0 : _a.domain,
             });
             await user.save();
             // Return user without sensitive data
@@ -97,6 +104,7 @@ exports.userController = {
     },
     // Admin: Update user
     async updateUser(req, res) {
+        var _a;
         try {
             const { name, role, status } = req.body;
             const updateData = {};
@@ -106,9 +114,7 @@ exports.userController = {
                 updateData.role = role;
             if (status !== undefined)
                 updateData.status = status;
-            const user = await User_1.User.findByIdAndUpdate(req.params.id, updateData, {
-                new: true,
-            }).select("-password -refreshTokens -resetPasswordToken -resetPasswordExpires");
+            const user = await User_1.User.findOneAndUpdate({ _id: req.params.id, domain: (_a = req.user) === null || _a === void 0 ? void 0 : _a.domain }, updateData, { new: true }).select("-password -refreshTokens -resetPasswordToken -resetPasswordExpires");
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }
@@ -121,8 +127,12 @@ exports.userController = {
     },
     // Admin: Delete user (soft delete by setting status to suspended)
     async deleteUser(req, res) {
+        var _a;
         try {
-            const user = await User_1.User.findById(req.params.id);
+            const user = await User_1.User.findOne({
+                _id: req.params.id,
+                domain: (_a = req.user) === null || _a === void 0 ? void 0 : _a.domain,
+            });
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }
@@ -138,8 +148,9 @@ exports.userController = {
     },
     // Admin: Activate/Reactivate user
     async activateUser(req, res) {
+        var _a;
         try {
-            const user = await User_1.User.findByIdAndUpdate(req.params.id, { status: "active" }, { new: true }).select("-password -refreshTokens -resetPasswordToken -resetPasswordExpires");
+            const user = await User_1.User.findOneAndUpdate({ _id: req.params.id, domain: (_a = req.user) === null || _a === void 0 ? void 0 : _a.domain }, { status: "active" }, { new: true }).select("-password -refreshTokens -resetPasswordToken -resetPasswordExpires");
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }
@@ -221,12 +232,20 @@ exports.userController = {
     },
     // Admin: Get user statistics
     async getUserStats(req, res) {
+        var _a;
         try {
-            const totalUsers = await User_1.User.countDocuments();
-            const activeUsers = await User_1.User.countDocuments({ status: "active" });
-            const suspendedUsers = await User_1.User.countDocuments({ status: "suspended" });
-            const adminUsers = await User_1.User.countDocuments({ role: "admin" });
-            const regularUsers = await User_1.User.countDocuments({ role: "user" });
+            const domain = (_a = req.user) === null || _a === void 0 ? void 0 : _a.domain;
+            const totalUsers = await User_1.User.countDocuments({ domain });
+            const activeUsers = await User_1.User.countDocuments({
+                status: "active",
+                domain,
+            });
+            const suspendedUsers = await User_1.User.countDocuments({
+                status: "suspended",
+                domain,
+            });
+            const adminUsers = await User_1.User.countDocuments({ role: "admin", domain });
+            const regularUsers = await User_1.User.countDocuments({ role: "user", domain });
             res.json({
                 total: totalUsers,
                 active: activeUsers,

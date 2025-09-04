@@ -5,19 +5,25 @@ import { io } from "../index";
 
 interface AuthRequest extends Request {
   user?: any;
+  userDomain?: string;
 }
 
 export const chatController = {
   async getAll(req: AuthRequest, res: Response) {
     try {
-      const query: any = {};
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
+      const query: any = { domain: req.userDomain }; // Filter by user's domain
+
+      // Admins can see all chats in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        } else {
+          return res.status(400).json({ error: "No user identifier found" });
+        }
       }
+
       const chats = await Chat.find(query).sort({ updatedAt: -1 });
       res.json(chats);
     } catch (error) {
@@ -28,14 +34,22 @@ export const chatController = {
 
   async getByDocumentId(req: AuthRequest, res: Response) {
     try {
-      const query: any = { documentId: req.params.documentId };
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
+      const query: any = {
+        documentId: req.params.documentId,
+        domain: req.userDomain, // Filter by user's domain
+      };
+
+      // Admins can see all chats in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        } else {
+          return res.status(400).json({ error: "No user identifier found" });
+        }
       }
+
       const chats = await Chat.find(query).sort({ updatedAt: -1 });
       res.json(chats);
     } catch (error) {
@@ -49,11 +63,18 @@ export const chatController = {
       const user = req.user;
       const chatData = { ...req.body };
 
-      // Only check if the document exists by id
-      const document = await Document.findOne({ id: chatData.documentId });
+      // Check if the document exists by id and belongs to user's domain
+      const document = await Document.findOne({
+        id: chatData.documentId,
+        domain: req.userDomain,
+      });
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
+
+      // Add domain to chat data
+      chatData.domain = req.userDomain;
+
       if (user.microsoftId) {
         chatData.microsoftId = user.microsoftId;
       } else if (user._id) {
@@ -76,14 +97,22 @@ export const chatController = {
 
   async addMessage(req: AuthRequest, res: Response) {
     try {
-      const query: any = { id: req.params.chatId };
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
+      const query: any = {
+        id: req.params.chatId,
+        domain: req.userDomain, // Ensure user can only access chats from their domain
+      };
+
+      // Admins can access all chats in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        } else {
+          return res.status(400).json({ error: "No user identifier found" });
+        }
       }
+
       const chat = await Chat.findOne(query);
       if (!chat) {
         return res.status(404).json({ error: "Chat not found" });
@@ -104,14 +133,22 @@ export const chatController = {
 
   async update(req: AuthRequest, res: Response) {
     try {
-      const query: any = { id: req.params.id };
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
+      const query: any = {
+        id: req.params.id,
+        domain: req.userDomain, // Ensure user can only update chats from their domain
+      };
+
+      // Admins can update all chats in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        } else {
+          return res.status(400).json({ error: "No user identifier found" });
+        }
       }
+
       const chat = await Chat.findOneAndUpdate(
         query,
         {
@@ -135,14 +172,22 @@ export const chatController = {
 
   async delete(req: AuthRequest, res: Response) {
     try {
-      const query: any = { id: req.params.id };
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
+      const query: any = {
+        id: req.params.id,
+        domain: req.userDomain, // Ensure user can only delete chats from their domain
+      };
+
+      // Admins can delete all chats in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        } else {
+          return res.status(400).json({ error: "No user identifier found" });
+        }
       }
+
       const chat = await Chat.findOneAndDelete(query);
       if (!chat) {
         return res.status(404).json({ error: "Chat not found" });

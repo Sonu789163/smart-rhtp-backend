@@ -13,12 +13,24 @@ const execAsync = promisify(exec);
 
 interface AuthRequest extends Request {
   user?: any;
+  userDomain?: string;
 }
 
 export const summaryController = {
-  async getAll(req: Request, res: Response) {
+  async getAll(req: AuthRequest, res: Response) {
     try {
-      const summaries = await Summary.find({}).sort({ updatedAt: -1 });
+      const query: any = { domain: req.userDomain }; // Filter by user's domain
+
+      // Admins can see all summaries in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        }
+      }
+
+      const summaries = await Summary.find(query).sort({ updatedAt: -1 });
       res.json(summaries);
     } catch (error) {
       console.error("Error fetching summaries:", error);
@@ -26,10 +38,24 @@ export const summaryController = {
     }
   },
 
-  async getByDocumentId(req: Request, res: Response) {
+  async getByDocumentId(req: AuthRequest, res: Response) {
     try {
       const { documentId } = req.params;
-      const summaries = await Summary.find({ documentId }).sort({
+      const query: any = {
+        documentId,
+        domain: req.userDomain, // Filter by user's domain
+      };
+
+      // Admins can see all summaries in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        }
+      }
+
+      const summaries = await Summary.find(query).sort({
         updatedAt: -1,
       });
       res.json(summaries);
@@ -54,6 +80,7 @@ export const summaryController = {
         title,
         content,
         documentId,
+        domain: req.userDomain, // Add domain for workspace isolation
         updatedAt: new Date(),
       };
 
@@ -120,14 +147,22 @@ export const summaryController = {
   async update(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const query: any = { id };
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
+      const query: any = {
+        id,
+        domain: req.userDomain, // Ensure user can only update summaries from their domain
+      };
+
+      // Admins can update all summaries in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        } else {
+          return res.status(400).json({ error: "No user identifier found" });
+        }
       }
+
       const summary = await Summary.findOneAndUpdate(query, req.body, {
         new: true,
       });
@@ -149,14 +184,22 @@ export const summaryController = {
   async delete(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const query: any = { id };
-      if (req.user.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user._id) {
-        query.userId = req.user._id.toString();
-      } else {
-        return res.status(400).json({ error: "No user identifier found" });
+      const query: any = {
+        id,
+        domain: req.userDomain, // Ensure user can only delete summaries from their domain
+      };
+
+      // Admins can delete all summaries in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        } else {
+          return res.status(400).json({ error: "No user identifier found" });
+        }
       }
+
       const summary = await Summary.findOneAndDelete(query).lean();
 
       res.json({ message: "Summary deleted successfully" });

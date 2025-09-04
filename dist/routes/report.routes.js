@@ -6,10 +6,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const reportController_1 = require("../controllers/reportController");
 const auth_1 = require("../middleware/auth");
+const domainAuth_1 = require("../middleware/domainAuth");
 const rateLimitByUser_1 = require("../middleware/rateLimitByUser");
 const router = express_1.default.Router();
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
+// Apply domain middleware to all routes
+router.use(domainAuth_1.domainAuthMiddleware);
 // Get all reports for the user
 router.get("/", reportController_1.reportController.getAll);
 // Get single report

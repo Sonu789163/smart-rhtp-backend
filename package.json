@@ -8,7 +8,9 @@
     "dev": "nodemon index.ts",
     "build": "tsc",
     "test": "jest",
-    "postinstall": "puppeteer install"
+    "postinstall": "puppeteer install",
+    "migrate:domain": "node scripts/migrateToDomainSeparation.js",
+    "migrate:domain:ts": "ts-node scripts/migrateToDomainSeparation.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.850.0",

@@ -14,6 +14,7 @@ const reportSchema = new mongoose_1.default.Schema({
     rhpId: { type: String, required: true },
     drhpNamespace: { type: String, required: true },
     rhpNamespace: { type: String, required: true },
+    domain: { type: String, required: true, index: true }, // Domain/workspace isolation
     microsoftId: { type: String },
     userId: { type: String },
 });

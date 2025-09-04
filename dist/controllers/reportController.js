@@ -16,7 +16,17 @@ const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.reportController = {
     async getAll(req, res) {
         try {
-            const reports = await Report_1.Report.find({}).sort({ updatedAt: -1 });
+            const query = { domain: req.userDomain }; // Filter by user's domain
+            // Admins can see all reports in their domain, regular users see only their own
+            if (req.user.role !== "admin") {
+                if (req.user.microsoftId) {
+                    query.microsoftId = req.user.microsoftId;
+                }
+                else if (req.user._id) {
+                    query.userId = req.user._id.toString();
+                }
+            }
+            const reports = await Report_1.Report.find(query).sort({ updatedAt: -1 });
             res.json(reports);
         }
         catch (error) {
@@ -26,7 +36,11 @@ exports.reportController = {
     },
     async getById(req, res) {
         try {
-            const report = await Report_1.Report.findOne({ id: req.params.id });
+            const query = {
+                id: req.params.id,
+                domain: req.userDomain, // Ensure user can only access reports from their domain
+            };
+            const report = await Report_1.Report.findOne(query);
             if (!report) {
                 return res.status(404).json({ error: "Report not found" });
             }
@@ -66,6 +80,7 @@ exports.reportController = {
                 rhpId,
                 drhpNamespace,
                 rhpNamespace,
+                domain: req.userDomain, // Add domain for workspace isolation
                 updatedAt: new Date(),
             };
             // Add user information if available
@@ -139,15 +154,21 @@ exports.reportController = {
     async update(req, res) {
         try {
             const { id } = req.params;
-            const query = { id };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
+            const query = {
+                id,
+                domain: req.userDomain, // Ensure user can only update reports from their domain
+            };
+            // Admins can update all reports in their domain, regular users see only their own
+            if (req.user.role !== "admin") {
+                if (req.user.microsoftId) {
+                    query.microsoftId = req.user.microsoftId;
+                }
+                else if (req.user._id) {
+                    query.userId = req.user._id.toString();
+                }
+                else {
+                    return res.status(400).json({ error: "No user identifier found" });
+                }
             }
             const report = await Report_1.Report.findOneAndUpdate(query, req.body, {
                 new: true,
@@ -164,15 +185,21 @@ exports.reportController = {
     },
     async delete(req, res) {
         try {
-            const query = { id: req.params.id };
-            if (req.user.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if (req.user._id) {
-                query.userId = req.user._id.toString();
-            }
-            else {
-                return res.status(400).json({ error: "No user identifier found" });
+            const query = {
+                id: req.params.id,
+                domain: req.userDomain, // Ensure user can only delete reports from their domain
+            };
+            // Admins can delete all reports in their domain, regular users see only their own
+            if (req.user.role !== "admin") {
+                if (req.user.microsoftId) {
+                    query.microsoftId = req.user.microsoftId;
+                }
+                else if (req.user._id) {
+                    query.userId = req.user._id.toString();
+                }
+                else {
+                    return res.status(400).json({ error: "No user identifier found" });
+                }
             }
             const report = await Report_1.Report.findOne(query);
             if (!report) {

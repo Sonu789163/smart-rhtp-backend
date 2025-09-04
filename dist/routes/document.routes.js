@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const documentController_1 = require("../controllers/documentController");
 const auth_1 = require("../middleware/auth");
+const domainAuth_1 = require("../middleware/domainAuth");
 const multer_1 = __importDefault(require("multer"));
 const r2_1 = require("../config/r2");
 const rateLimitByUser_1 = require("../middleware/rateLimitByUser");
@@ -15,6 +16,8 @@ const router = express_1.default.Router();
 router.post("/upload-status/update", documentController_1.documentController.uploadStatusUpdate);
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
+// Apply domain middleware to all routes
+router.use(domainAuth_1.domainAuthMiddleware);
 const upload = (0, multer_1.default)({
     storage: (0, multer_s3_1.default)({
         s3: r2_1.r2Client,

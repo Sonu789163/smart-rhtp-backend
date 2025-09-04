@@ -1,11 +1,14 @@
 import express from "express";
 import { userController } from "../controllers/userController";
 import { authMiddleware, authorize } from "../middleware/auth";
+import { domainAuthMiddleware } from "../middleware/domainAuth";
 
 const router = express.Router();
 
 // Apply auth middleware to all routes
 router.use(authMiddleware);
+// Apply domain middleware to all routes
+router.use(domainAuthMiddleware);
 
 // Admin-only routes
 router.get("/", authorize(["admin"]), userController.getAllUsers);

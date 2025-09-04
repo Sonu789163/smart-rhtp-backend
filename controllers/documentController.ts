@@ -8,19 +8,29 @@ import { GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 
 interface AuthRequest extends Request {
   user?: any;
+  userDomain?: string;
 }
 
 export const documentController = {
-  async getAll(req: Request, res: Response) {
+  async getAll(req: AuthRequest, res: Response) {
     try {
-      // Admins can view all documents, regular users should only view their accessible set.
-      // Current schema doesn't store uploader; until added, return all for now.
-      // If a type filter is provided, use it; otherwise return all.
       const { type } = (req.query || {}) as { type?: string };
-      const query: any = {};
+      const query: any = { domain: req.userDomain }; // Filter by user's domain
+
+      // If a type filter is provided, use it
       if (type === "DRHP" || type === "RHP") {
         query.type = type;
       }
+
+      // Admins can see all documents in their domain, regular users see only their own
+      if (req.user.role !== "admin") {
+        if (req.user.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user._id) {
+          query.userId = req.user._id.toString();
+        }
+      }
+
       const documents = await Document.find(query).sort({ uploadedAt: -1 });
       res.json(documents);
     } catch (error) {
@@ -28,9 +38,12 @@ export const documentController = {
     }
   },
 
-  async getById(req: Request, res: Response) {
+  async getById(req: AuthRequest, res: Response) {
     try {
-      const query: any = { id: req.params.id };
+      const query: any = {
+        id: req.params.id,
+        domain: req.userDomain, // Ensure user can only access documents from their domain
+      };
       const document = await Document.findOne(query);
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
@@ -41,13 +54,15 @@ export const documentController = {
     }
   },
 
-  async create(req: Request, res: Response) {
+  async create(req: AuthRequest, res: Response) {
     try {
       const docData = { ...req.body };
       // Ensure namespace is always set
       if (!docData.namespace) {
         docData.namespace = docData.name;
       }
+      // Add domain to document data
+      docData.domain = req.userDomain;
       const document = new Document(docData);
       await document.save();
       res.status(201).json(document);
@@ -57,9 +72,12 @@ export const documentController = {
     }
   },
 
-  async update(req: Request, res: Response) {
+  async update(req: AuthRequest, res: Response) {
     try {
-      const query: any = { id: req.params.id };
+      const query: any = {
+        id: req.params.id,
+        domain: req.userDomain, // Ensure user can only update documents from their domain
+      };
       const document = await Document.findOneAndUpdate(query, req.body, {
         new: true,
       });
@@ -72,9 +90,12 @@ export const documentController = {
     }
   },
 
-  async delete(req: Request, res: Response) {
+  async delete(req: AuthRequest, res: Response) {
     try {
-      const query: any = { id: req.params.id };
+      const query: any = {
+        id: req.params.id,
+        domain: req.userDomain, // Ensure user can only delete documents from their domain
+      };
       const document = await Document.findOne(query);
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
@@ -149,6 +170,7 @@ export const documentController = {
         fileKey: fileKey,
         namespace: req.body.namespace || originalname,
         type: "DRHP", // Set type for DRHP documents
+        domain: user.domain, // Add domain for workspace isolation
       };
       if (user?.microsoftId) {
         docData.microsoftId = user.microsoftId;
@@ -234,14 +256,10 @@ export const documentController = {
           .json({ error: "Namespace parameter is required" });
       }
 
-      const query: any = { namespace: namespace as string };
-      // if (req.user.microsoftId) {
-      //   query.microsoftId = req.user.microsoftId;
-      // } else if (req.user._id) {
-      //   query.userId = req.user._id.toString();
-      // } else {
-      //   return res.status(400).json({ error: "No user identifier found" });
-      // }
+      const query: any = {
+        namespace: namespace as string,
+        domain: req.userDomain, // Check within user's domain only
+      };
 
       const existingDocument = await Document.findOne(query);
 
@@ -310,6 +328,7 @@ export const documentController = {
         rhpNamespace: rhpNamespace,
         type: "RHP",
         relatedDrhpId: drhp.id,
+        domain: user.domain, // Add domain for workspace isolation
       };
 
       // Add user information if available

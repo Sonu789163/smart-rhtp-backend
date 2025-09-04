@@ -12,8 +12,18 @@ const crypto_1 = __importDefault(require("crypto"));
 const domainConfig_1 = require("../config/domainConfig");
 // Helper to generate tokens
 const generateTokens = async (user) => {
-    const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
-    const refreshToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email, role: user.role }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
+    const accessToken = jsonwebtoken_1.default.sign({
+        userId: user._id,
+        email: user.email,
+        role: user.role,
+        domain: user.domain,
+    }, process.env.JWT_SECRET, { expiresIn: "1d" });
+    const refreshToken = jsonwebtoken_1.default.sign({
+        userId: user._id,
+        email: user.email,
+        role: user.role,
+        domain: user.domain,
+    }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
     // Store refresh token
     if (!user.refreshTokens) {
         user.refreshTokens = [];

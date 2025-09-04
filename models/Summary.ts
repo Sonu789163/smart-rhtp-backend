@@ -6,6 +6,7 @@ const summarySchema = new mongoose.Schema({
   content: { type: String, required: true },
   updatedAt: { type: Date, default: Date.now },
   documentId: { type: String, required: true },
+  domain: { type: String, required: true, index: true }, // Domain/workspace isolation
   microsoftId: { type: String },
   userId: { type: String },
 });

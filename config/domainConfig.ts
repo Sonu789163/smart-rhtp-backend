@@ -3,12 +3,7 @@
 
 export const DOMAIN_CONFIG = {
   // Allowed email domains for user registration
-  ALLOWED_DOMAINS: [
-    "excollo.com", // Current client domain
-    // Add more domains as needed:
-    // "client2.com",
-    // "client3.com",
-  ],
+  ALLOWED_DOMAINS: [], // Allow all domains
 
   // Special allowed emails from other domains (exceptions)
   ALLOWED_SPECIAL_EMAILS: [
@@ -19,7 +14,7 @@ export const DOMAIN_CONFIG = {
   DEFAULT_USER_ROLE: "user" as const,
 
   // Whether to allow multiple domains or restrict to single domain
-  ALLOW_MULTIPLE_DOMAINS: false,
+  ALLOW_MULTIPLE_DOMAINS: true,
 
   // Custom domain validation rules
   VALIDATION: {
@@ -43,17 +38,8 @@ export function isEmailDomainAllowed(email: string): boolean {
 
   const domain = email.split("@")[1]?.toLowerCase();
   if (!domain) return false;
-
-  // Check if domain matches any allowed domain
-  return DOMAIN_CONFIG.ALLOWED_DOMAINS.some((allowedDomain) => {
-    if (DOMAIN_CONFIG.VALIDATION.ALLOW_SUBDOMAINS) {
-      // Allow subdomains (e.g., user.subdomain.excollo.com matches excollo.com)
-      return domain === allowedDomain || domain.endsWith("." + allowedDomain);
-    } else {
-      // Exact domain match only
-      return domain === allowedDomain;
-    }
-  });
+  // Allow all domains
+  return true;
 }
 
 // Helper function to get the primary domain from email
@@ -69,16 +55,8 @@ export function getPrimaryDomain(email: string): string | null {
   const domain = email.split("@")[1]?.toLowerCase();
   if (!domain) return null;
 
-  // Find the matching allowed domain
-  const allowedDomain = DOMAIN_CONFIG.ALLOWED_DOMAINS.find((allowedDomain) => {
-    if (DOMAIN_CONFIG.VALIDATION.ALLOW_SUBDOMAINS) {
-      return domain === allowedDomain || domain.endsWith("." + allowedDomain);
-    } else {
-      return domain === allowedDomain;
-    }
-  });
-
-  return allowedDomain || null;
+  // Return the raw domain (allow all domains)
+  return domain;
 }
 
 // Helper function to validate email format and domain
@@ -104,15 +82,6 @@ export function validateEmail(email: string): {
     return {
       isValid: false,
       error: `Email must be no more than ${DOMAIN_CONFIG.VALIDATION.MAX_EMAIL_LENGTH} characters`,
-    };
-  }
-
-  // Check domain restriction
-  if (!isEmailDomainAllowed(email)) {
-    const allowedDomains = DOMAIN_CONFIG.ALLOWED_DOMAINS.join(", ");
-    return {
-      isValid: false,
-      error: `Email domain not allowed. Only emails from these domains are accepted: ${allowedDomains}`,
     };
   }
 

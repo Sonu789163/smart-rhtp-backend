@@ -6,9 +6,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const userController_1 = require("../controllers/userController");
 const auth_1 = require("../middleware/auth");
+const domainAuth_1 = require("../middleware/domainAuth");
 const router = express_1.default.Router();
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
+// Apply domain middleware to all routes
+router.use(domainAuth_1.domainAuthMiddleware);
 // Admin-only routes
 router.get("/", (0, auth_1.authorize)(["admin"]), userController_1.userController.getAllUsers);
 router.get("/stats", (0, auth_1.authorize)(["admin"]), userController_1.userController.getUserStats);

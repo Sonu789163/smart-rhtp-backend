@@ -39,16 +39,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const summaryController_1 = require("../controllers/summaryController");
 const auth_1 = require("../middleware/auth");
+const domainAuth_1 = require("../middleware/domainAuth");
 const rateLimitByUser_1 = require("../middleware/rateLimitByUser");
 const router = express_1.default.Router();
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
+// Apply domain middleware to all routes
+router.use(domainAuth_1.domainAuthMiddleware);
 // Get all summaries for the user
 router.get("/", summaryController_1.summaryController.getAll);
 // Admin metrics: total summaries count
 router.get("/admin/metrics/count", async (req, res) => {
+    var _a;
     try {
-        const total = await (await Promise.resolve().then(() => __importStar(require("../models/Summary")))).Summary.countDocuments({});
+        const { Summary } = await Promise.resolve().then(() => __importStar(require("../models/Summary")));
+        const total = await Summary.countDocuments({
+            domain: (_a = req.user) === null || _a === void 0 ? void 0 : _a.domain,
+        });
         res.json({ total });
     }
     catch (e) {
