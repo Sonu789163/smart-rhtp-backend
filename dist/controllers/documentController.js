@@ -19,15 +19,7 @@ exports.documentController = {
             if (type === "DRHP" || type === "RHP") {
                 query.type = type;
             }
-            // Admins can see all documents in their domain, regular users see only their own
-            if (req.user.role !== "admin") {
-                if (req.user.microsoftId) {
-                    query.microsoftId = req.user.microsoftId;
-                }
-                else if (req.user._id) {
-                    query.userId = req.user._id.toString();
-                }
-            }
+            // All users can see all documents within their domain
             const documents = await Document_1.Document.find(query).sort({ uploadedAt: -1 });
             res.json(documents);
         }
