@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User";
+import { sendEmail } from "../services/emailService";
+import { rateLimitByWorkspace } from "../middleware/rateLimitByWorkspace";
 
 interface AuthRequest extends Request {
   user?: any;
@@ -221,11 +223,10 @@ export const userController = {
   // User: Update own profile
   async updateMyProfile(req: AuthRequest, res: Response) {
     try {
-      const { name, phoneNumber, gender } = req.body;
+      const { name, gender } = req.body;
       const updateData: any = {};
 
       if (name !== undefined) updateData.name = name;
-      if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
       if (gender !== undefined) updateData.gender = gender;
 
       const user = await User.findByIdAndUpdate(req.user._id, updateData, {
@@ -242,6 +243,85 @@ export const userController = {
     } catch (error) {
       console.error("Error updating profile:", error);
       res.status(500).json({ message: "Failed to update profile" });
+    }
+  },
+
+  // User: Initiate OTP for profile update
+  async initiateProfileUpdateOtp(req: AuthRequest, res: Response) {
+    try {
+      const { pendingUpdate } = req.body || {};
+      if (!pendingUpdate || typeof pendingUpdate !== "object") {
+        return res.status(400).json({ message: "pendingUpdate is required" });
+      }
+
+      const user = await User.findById(req.user?._id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expires = new Date(Date.now() + 10 * 60 * 1000);
+
+      user.profileUpdateOTP = otp;
+      user.profileUpdateOTPExpires = expires;
+      user.profileUpdatePendingData = pendingUpdate;
+      await user.save();
+
+      await sendEmail({
+        to: user.email,
+        subject: "Verify your profile update",
+        template: "profile-update-otp",
+        data: { otp, expiresMinutes: 10 },
+      });
+
+      return res.json({ message: "OTP sent to your email" });
+    } catch (error) {
+      console.error("Error initiating profile update OTP:", error);
+      res.status(500).json({ message: "Failed to initiate profile update" });
+    }
+  },
+
+  // User: Verify OTP and apply profile update
+  async verifyProfileUpdateOtp(req: AuthRequest, res: Response) {
+    try {
+      const { otp } = req.body || {};
+      if (!otp) return res.status(400).json({ message: "OTP is required" });
+
+      const user = await User.findById(req.user?._id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      if (!user.profileUpdateOTP || !user.profileUpdateOTPExpires) {
+        return res.status(400).json({ message: "No OTP in progress" });
+      }
+
+      if (String(otp) !== String(user.profileUpdateOTP)) {
+        return res.status(400).json({ message: "Invalid OTP" });
+      }
+
+      if (new Date() > new Date(user.profileUpdateOTPExpires)) {
+        return res.status(400).json({ message: "OTP expired" });
+      }
+
+      const pending = (user.profileUpdatePendingData || {}) as any;
+      const updateData: any = {};
+      if (pending.name !== undefined) updateData.name = pending.name;
+      if (pending.gender !== undefined) updateData.gender = pending.gender;
+
+      // Apply updates
+      Object.assign(user, updateData);
+
+      // Clear OTP data
+      user.profileUpdateOTP = undefined as any;
+      user.profileUpdateOTPExpires = undefined as any;
+      user.profileUpdatePendingData = undefined as any;
+      await user.save();
+
+      const safeUser = await User.findById(user._id).select(
+        "-password -refreshTokens -resetPasswordToken -resetPasswordExpires"
+      );
+
+      return res.json({ message: "Profile updated successfully", user: safeUser });
+    } catch (error) {
+      console.error("Error verifying profile update OTP:", error);
+      res.status(500).json({ message: "Failed to verify OTP" });
     }
   },
 
@@ -269,15 +349,62 @@ export const userController = {
         return res.status(400).json({ message: "Invalid old password" });
       }
 
-      // Hash new password
+      // Initiate OTP for password change instead of applying immediately
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expires = new Date(Date.now() + 10 * 60 * 1000);
       const hashedPassword = await bcrypt.hash(newPassword, 10);
-      user.password = hashedPassword;
+
+      user.passwordChangeOTP = otp;
+      user.passwordChangeOTPExpires = expires;
+      user.passwordChangePendingHash = hashedPassword;
+      await user.save();
+
+      await sendEmail({
+        to: user.email,
+        subject: "Verify your password change",
+        template: "password-change-otp",
+        data: { otp, expiresMinutes: 10 },
+      });
+
+      res.json({ message: "OTP sent to your email to verify password change" });
+    } catch (error) {
+      console.error("Error changing password:", error);
+      res.status(500).json({ message: "Failed to change password" });
+    }
+  },
+
+  // User: Verify OTP and apply password change
+  async verifyPasswordChangeOtp(req: AuthRequest, res: Response) {
+    try {
+      const { otp } = req.body || {};
+      if (!otp) return res.status(400).json({ message: "OTP is required" });
+
+      const user = await User.findById(req.user?._id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      if (!user.passwordChangeOTP || !user.passwordChangeOTPExpires || !user.passwordChangePendingHash) {
+        return res.status(400).json({ message: "No password change in progress" });
+      }
+
+      if (String(otp) !== String(user.passwordChangeOTP)) {
+        return res.status(400).json({ message: "Invalid OTP" });
+      }
+
+      if (new Date() > new Date(user.passwordChangeOTPExpires)) {
+        return res.status(400).json({ message: "OTP expired" });
+      }
+
+      // Apply new password
+      user.password = user.passwordChangePendingHash;
+      user.passwordChangeOTP = undefined as any;
+      user.passwordChangeOTPExpires = undefined as any;
+      user.passwordChangePendingHash = undefined as any;
       await user.save();
 
       res.json({ message: "Password changed successfully" });
     } catch (error) {
-      console.error("Error changing password:", error);
-      res.status(500).json({ message: "Failed to change password" });
+      console.error("Error verifying password change OTP:", error);
+      res.status(500).json({ message: "Failed to verify password change" });
     }
   },
 

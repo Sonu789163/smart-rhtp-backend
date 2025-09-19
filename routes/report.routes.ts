@@ -2,33 +2,39 @@ import express from "express";
 import { reportController } from "../controllers/reportController";
 import { authMiddleware } from "../middleware/auth";
 import { domainAuthMiddleware } from "../middleware/domainAuth";
-import { rateLimitByUser } from "../middleware/rateLimitByUser";
+import { rateLimitByWorkspace } from "../middleware/rateLimitByWorkspace";
+import { requireReportPermission, requireBodyDocumentPermission } from "../middleware/permissions";
+import { linkAccess } from "../middleware/linkAccess";
 
 const router = express.Router();
 
-// Apply auth middleware to all routes
+// Allow link access for related reports
+router.use(linkAccess);
+// Apply auth (skipped if linkToken provided)
 router.use(authMiddleware);
-// Apply domain middleware to all routes
+// Apply domain (respects link domain)
 router.use(domainAuthMiddleware);
 
 // Get all reports for the user
 router.get("/", reportController.getAll);
 
 // Get single report
-router.get("/:id", reportController.getById);
+router.get("/:id", requireReportPermission("id", "viewer"), reportController.getById);
 
 // Create new report (rate limited)
 router.post(
   "/create-report",
-  rateLimitByUser("report:create", 20, 24 * 60 * 60 * 1000),
+  rateLimitByWorkspace("report:create", 100, 24 * 60 * 60 * 1000),
+  // Need at least editor on DRHP to create a report
+  requireBodyDocumentPermission("drhpId", "editor"),
   reportController.create
 );
 
 // Update report
-router.put("/:id", reportController.update);
+router.put("/:id", requireReportPermission("id", "editor"), reportController.update);
 
 // Delete report
-router.delete("/:id", reportController.delete);
+router.delete("/:id", requireReportPermission("id", "owner"), reportController.delete);
 
 // Download DOCX for a report
 router.get("/:id/download-docx", reportController.downloadDocx);

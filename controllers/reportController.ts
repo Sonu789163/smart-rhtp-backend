@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { Report } from "../models/Report";
 import axios from "axios";
 import { io } from "../index";
+import { publishEvent } from "../lib/events";
 import { r2Client, R2_BUCKET } from "../config/r2";
 import {
   GetObjectCommand,
@@ -20,15 +21,23 @@ const execAsync = promisify(exec);
 interface AuthRequest extends Request {
   user?: any;
   userDomain?: string;
+  currentWorkspace?: string;
 }
 
 export const reportController = {
   async getAll(req: AuthRequest, res: Response) {
     try {
-      const query: any = { domain: req.userDomain }; // Filter by user's domain
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
 
-      // Admins can see all reports in their domain, regular users see only their own
-      if (req.user.role !== "admin") {
+      const query: any = {
+        domain: req.userDomain, // Filter by user's domain
+        workspaceId: currentWorkspace, // Filter by user's workspace
+      };
+
+      const link = (req as any).linkAccess;
+      // Admins or link access can see all reports in domain
+      if (!link && req.user && req.user.role !== "admin") {
         if (req.user.microsoftId) {
           query.microsoftId = req.user.microsoftId;
         } else if (req.user._id) {
@@ -88,6 +97,9 @@ export const reportController = {
         });
       }
 
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
       const reportData: any = {
         id: Date.now().toString(),
         title,
@@ -97,6 +109,7 @@ export const reportController = {
         drhpNamespace,
         rhpNamespace,
         domain: req.userDomain, // Add domain for workspace isolation
+        workspaceId: currentWorkspace, // Add workspace for team isolation
         updatedAt: new Date(),
       };
 
@@ -111,6 +124,17 @@ export const reportController = {
 
       const report = new Report(reportData);
       await report.save();
+
+      // Publish event for workspace notification
+      await publishEvent({
+        actorUserId: req.user?._id?.toString?.(),
+        domain: req.userDomain!,
+        action: "report.created",
+        resourceType: "report",
+        resourceId: report.id,
+        title: `New report created: ${report.title}`,
+        notifyWorkspace: true,
+      });
 
       res.status(201).json(report);
     } catch (error) {
@@ -234,6 +258,15 @@ export const reportController = {
       }
 
       await report.deleteOne();
+      await publishEvent({
+        actorUserId: req.user?._id?.toString?.(),
+        domain: req.userDomain!,
+        action: "report.deleted",
+        resourceType: "report",
+        resourceId: report.id,
+        title: `Report deleted: ${report.title || report.id}`,
+        notifyWorkspace: true,
+      });
       res.json({ message: "Report deleted successfully" });
     } catch (error) {
       console.error("Error deleting report:", error);

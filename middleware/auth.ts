@@ -4,6 +4,8 @@ import { User } from "../models/User";
 
 interface AuthRequest extends Request {
   user?: any;
+  userDomain?: string;
+  currentWorkspace?: string;
 }
 
 export const authMiddleware = async (
@@ -12,6 +14,13 @@ export const authMiddleware = async (
   next: NextFunction
 ) => {
   try {
+    // Check for link access first - allow unauthenticated access via link
+    const linkToken = req.query.linkToken as string;
+    if (linkToken) {
+      // Skip authentication for link access - will be handled by linkAccess middleware
+      return next();
+    }
+
     const token = req.header("Authorization")?.replace("Bearer ", "");
 
     if (!token) {
@@ -39,6 +48,16 @@ export const authMiddleware = async (
     }
 
     req.user = user;
+
+    // Extract workspace from headers
+    const workspaceHeader = req.header("x-workspace");
+    if (workspaceHeader) {
+      req.currentWorkspace = workspaceHeader;
+    } else {
+      // Fallback to user's domain if no workspace header
+      req.currentWorkspace = user.domain;
+    }
+
     next();
   } catch (error) {
     res.status(401).json({ message: "Token is not valid" });

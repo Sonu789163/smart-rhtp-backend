@@ -2,10 +2,12 @@ import express from "express";
 import { documentController } from "../controllers/documentController";
 import { authMiddleware, authorize } from "../middleware/auth";
 import { domainAuthMiddleware } from "../middleware/domainAuth";
+import { linkAccess } from "../middleware/linkAccess";
+import { requireCreateInDirectory, requireDocumentPermission } from "../middleware/permissions";
 import multer from "multer";
 import { Request, Response, NextFunction } from "express";
 import { r2Client, R2_BUCKET } from "../config/r2";
-import { rateLimitByUser } from "../middleware/rateLimitByUser";
+import { rateLimitByWorkspace } from "../middleware/rateLimitByWorkspace";
 import multerS3 from "multer-s3";
 
 const router = express.Router();
@@ -13,9 +15,11 @@ const router = express.Router();
 // POST /upload-status/update (for n8n to notify upload status)
 router.post("/upload-status/update", documentController.uploadStatusUpdate);
 
-// Apply auth middleware to all routes
+// Process link access FIRST so downstream middlewares can use it
+router.use(linkAccess);
+// Apply auth middleware to all routes (skipped when linkToken present)
 router.use(authMiddleware);
-// Apply domain middleware to all routes
+// Apply domain middleware to all routes (respects link access domain)
 router.use(domainAuthMiddleware);
 
 const upload = multer({
@@ -37,23 +41,22 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
 });
 
-// Get all documents for current user
+// Get all documents for current user (supports directoryId and includeDeleted)
 router.get("/", documentController.getAll);
 
 // Check if document exists by namespace
 router.get("/check-existing", documentController.checkExistingByNamespace);
 
 // Get single document
-router.get("/:id", documentController.getById);
+router.get("/:id", requireDocumentPermission("id", "viewer"), documentController.getById);
 
 // Create document
-router.post("/", documentController.create);
+router.post("/", requireCreateInDirectory, documentController.create);
 
 // Upload PDF document
 router.post(
   "/upload",
-  authorize(["admin"]),
-  rateLimitByUser("document:upload", 20, 24 * 60 * 60 * 1000),
+  rateLimitByWorkspace("document:upload", 100, 24 * 60 * 60 * 1000),
   upload.single("file"),
   // @ts-ignore
   function (err: any, req: Request, res: Response, next: NextFunction) {
@@ -70,8 +73,7 @@ router.post(
 // Upload RHP document
 router.post(
   "/upload-rhp",
-  authorize(["admin"]),
-  rateLimitByUser("document:upload", 20, 24 * 60 * 60 * 1000),
+  rateLimitByWorkspace("document:upload", 100, 24 * 60 * 60 * 1000),
   upload.single("file"), // @ts-ignore
   documentController.uploadRhp
 );
@@ -80,9 +82,11 @@ router.post(
 router.get("/download/:id", documentController.downloadDocument);
 
 // Update document
-router.put("/:id", documentController.update);
+router.put("/:id", requireDocumentPermission("id", "editor"), documentController.update);
 
 // Delete document
-router.delete("/:id", authorize(["admin"]), documentController.delete);
+router.delete("/:id", requireDocumentPermission("id", "editor"), documentController.delete);
+
+// Restore route removed (trash disabled for now)
 
 export default router;

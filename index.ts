@@ -9,6 +9,13 @@ import summaryRoutes from "./routes/summary.routes";
 import authRoutes from "./routes/auth.routes";
 import reportRoutes from "./routes/report.routes";
 import userRoutes from "./routes/user.routes";
+import workspaceInvitationRoutes from "./routes/workspaceInvitation.routes";
+import publicInvitationRoutes from "./routes/publicInvitation.routes";
+import directoryRoutes from "./routes/directory.routes";
+// import trashRoutes from "./routes/trash.routes";
+import shareRoutes from "./routes/share.routes";
+import notificationRoutes from "./routes/notification.routes";
+import workspaceRoutes from "./routes/workspace.routes";
 import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import helmet from "helmet";
@@ -59,9 +66,10 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // MongoDB Connection
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://Sonu7891:Sonu1234@cluster0.qfv4x.mongodb.net/pdf-summarizer";
+const MONGODB_URI = process.env.MONGODB_URI ;
+if (!MONGODB_URI) {
+  throw new Error("MONGODB_URI is not set");
+}
 
 mongoose
   .connect(MONGODB_URI)
@@ -79,6 +87,13 @@ app.use("/api/chats", chatRoutes);
 app.use("/api/summaries", summaryRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/workspace-invitations", workspaceInvitationRoutes);
+app.use("/api/invitation", publicInvitationRoutes);
+app.use("/api/directories", directoryRoutes);
+// app.use("/api/trash", trashRoutes); // disabled for now
+app.use("/api/shares", shareRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/workspaces", workspaceRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {

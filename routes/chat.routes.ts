@@ -2,7 +2,7 @@ import express from "express";
 import { chatController } from "../controllers/chatController";
 import { authMiddleware, authorize } from "../middleware/auth";
 import { domainAuthMiddleware } from "../middleware/domainAuth";
-import { rateLimitByUser } from "../middleware/rateLimitByUser";
+import { rateLimitByWorkspace } from "../middleware/rateLimitByWorkspace";
 
 const router = express.Router();
 
@@ -26,7 +26,7 @@ router.get("/document/:documentId", chatController.getByDocumentId);
 // Create new chat (rate limited)
 router.post(
   "/",
-  rateLimitByUser("chat:create", 200, 24 * 60 * 60 * 1000),
+  rateLimitByWorkspace("chat:create", 1000, 24 * 60 * 60 * 1000),
   chatController.create
 );
 

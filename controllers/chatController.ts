@@ -6,12 +6,19 @@ import { io } from "../index";
 interface AuthRequest extends Request {
   user?: any;
   userDomain?: string;
+  currentWorkspace?: string;
 }
 
 export const chatController = {
   async getAll(req: AuthRequest, res: Response) {
     try {
-      const query: any = { domain: req.userDomain }; // Filter by user's domain
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      const query: any = {
+        domain: req.userDomain, // Filter by user's domain
+        workspaceId: currentWorkspace, // Filter by user's workspace
+      };
 
       // Admins can see all chats in their domain, regular users see only their own
       if (req.user.role !== "admin") {
@@ -63,17 +70,22 @@ export const chatController = {
       const user = req.user;
       const chatData = { ...req.body };
 
-      // Check if the document exists by id and belongs to user's domain
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      // Check if the document exists by id and belongs to user's domain and workspace
       const document = await Document.findOne({
         id: chatData.documentId,
         domain: req.userDomain,
+        workspaceId: currentWorkspace,
       });
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
 
-      // Add domain to chat data
+      // Add domain and workspace to chat data
       chatData.domain = req.userDomain;
+      chatData.workspaceId = currentWorkspace;
 
       if (user.microsoftId) {
         chatData.microsoftId = user.microsoftId;

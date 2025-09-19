@@ -4,7 +4,7 @@ const userSchema = new mongoose.Schema({
   microsoftId: { type: String, unique: true, sparse: true },
   name: { type: String },
   email: { type: String, required: true, unique: true },
-  domain: { type: String, required: true, index: true },
+  domain: { type: String, required: true, index: true }, // Primary domain
   password: { type: String }, // Optional: only for email/password users
   role: { type: String, enum: ["admin", "user"], default: "user", index: true },
   status: {
@@ -13,8 +13,44 @@ const userSchema = new mongoose.Schema({
     default: "active",
     index: true,
   },
-  // New profile fields
-  phoneNumber: { type: String },
+
+  // Workspace access management
+  accessibleWorkspaces: [
+    {
+      workspaceDomain: { type: String, required: true },
+      workspaceName: { type: String, required: true },
+      role: {
+        type: String,
+        enum: ["user", "viewer", "editor"],
+        default: "user",
+      },
+      // Time-bucket permissions for documents within this workspace
+      allowedTimeBuckets: {
+        type: [
+          {
+            type: String,
+            enum: ["today", "last7", "last15", "last30", "last90", "all"],
+          },
+        ],
+        default: ["last7"],
+      },
+      // Explicit overrides
+      extraDocumentIds: { type: [{ type: String }], default: [] },
+      blockedDocumentIds: { type: [{ type: String }], default: [] },
+      invitedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      joinedAt: { type: Date, default: Date.now },
+      isActive: { type: Boolean, default: true },
+    },
+  ],
+
+  // Current active workspace (for UI)
+  currentWorkspace: {
+    type: String,
+    default: function (this: any) {
+      return this.domain;
+    }, // Default to user's primary domain
+  },
+
   gender: {
     type: String,
     enum: ["male", "female", "other", "prefer-not-to-say"],
@@ -25,6 +61,16 @@ const userSchema = new mongoose.Schema({
   lastLogin: { type: Date, default: Date.now },
   resetPasswordToken: { type: String },
   resetPasswordExpires: { type: Date },
+
+  // Profile update OTP flow
+  profileUpdateOTP: { type: String },
+  profileUpdateOTPExpires: { type: Date },
+  profileUpdatePendingData: { type: mongoose.Schema.Types.Mixed },
+
+  // Password change OTP flow
+  passwordChangeOTP: { type: String },
+  passwordChangeOTPExpires: { type: Date },
+  passwordChangePendingHash: { type: String },
 });
 
 export const User = mongoose.model("User", userSchema);

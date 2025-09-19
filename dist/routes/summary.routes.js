@@ -40,11 +40,15 @@ const express_1 = __importDefault(require("express"));
 const summaryController_1 = require("../controllers/summaryController");
 const auth_1 = require("../middleware/auth");
 const domainAuth_1 = require("../middleware/domainAuth");
-const rateLimitByUser_1 = require("../middleware/rateLimitByUser");
+const rateLimitByWorkspace_1 = require("../middleware/rateLimitByWorkspace");
+const permissions_1 = require("../middleware/permissions");
 const router = express_1.default.Router();
-// Apply auth middleware to all routes
+// Enable link access to summaries of shared documents
+const linkAccess_1 = require("../middleware/linkAccess");
+router.use(linkAccess_1.linkAccess);
+// Apply auth (skipped if linkToken provided)
 router.use(auth_1.authMiddleware);
-// Apply domain middleware to all routes
+// Apply domain (respects link domain)
 router.use(domainAuth_1.domainAuthMiddleware);
 // Get all summaries for the user
 router.get("/", summaryController_1.summaryController.getAll);
@@ -65,11 +69,11 @@ router.get("/admin/metrics/count", async (req, res) => {
 // Get summaries for a document
 router.get("/document/:documentId", summaryController_1.summaryController.getByDocumentId);
 // Create new summary (rate limited)
-router.post("/create", (0, rateLimitByUser_1.rateLimitByUser)("summary:create", 40, 24 * 60 * 60 * 1000), summaryController_1.summaryController.create);
+router.post("/create", (0, rateLimitByWorkspace_1.rateLimitByWorkspace)("summary:create", 300, 24 * 60 * 60 * 1000), (0, permissions_1.requireBodyDocumentPermission)("documentId", "editor"), summaryController_1.summaryController.create);
 // Update summary
-router.put("/:id", summaryController_1.summaryController.update);
+router.put("/:id", (0, permissions_1.requireSummaryPermission)("id", "editor"), summaryController_1.summaryController.update);
 // Delete summary
-router.delete("/:id", summaryController_1.summaryController.delete);
+router.delete("/:id", (0, permissions_1.requireSummaryPermission)("id", "owner"), summaryController_1.summaryController.delete);
 // Download DOCX for a summary
 router.get("/:id/download-docx", summaryController_1.summaryController.downloadDocx);
 // Download PDF generated from HTML content for a summary

@@ -7,22 +7,32 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import os from "os";
+import htmlDocx from "html-docx-js";
 import { io } from "../index";
+import { publishEvent } from "../lib/events";
 
 const execAsync = promisify(exec);
 
 interface AuthRequest extends Request {
   user?: any;
   userDomain?: string;
+  currentWorkspace?: string;
 }
 
 export const summaryController = {
   async getAll(req: AuthRequest, res: Response) {
     try {
-      const query: any = { domain: req.userDomain }; // Filter by user's domain
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
 
-      // Admins can see all summaries in their domain, regular users see only their own
-      if (req.user.role !== "admin") {
+      const query: any = {
+        domain: req.userDomain, // Filter by user's domain
+        workspaceId: currentWorkspace, // Filter by user's workspace
+      };
+
+      const link = (req as any).linkAccess;
+      // Admins or link access can see all summaries in domain
+      if (!link && req.user && req.user.role !== "admin") {
         if (req.user.microsoftId) {
           query.microsoftId = req.user.microsoftId;
         } else if (req.user._id) {
@@ -41,13 +51,17 @@ export const summaryController = {
   async getByDocumentId(req: AuthRequest, res: Response) {
     try {
       const { documentId } = req.params;
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
       const query: any = {
         documentId,
         domain: req.userDomain, // Filter by user's domain
+        workspaceId: currentWorkspace, // Filter by user's workspace
       };
 
-      // Admins can see all summaries in their domain, regular users see only their own
-      if (req.user.role !== "admin") {
+      const link = (req as any).linkAccess;
+      if (!link && req.user && req.user.role !== "admin") {
         if (req.user.microsoftId) {
           query.microsoftId = req.user.microsoftId;
         } else if (req.user._id) {
@@ -75,12 +89,16 @@ export const summaryController = {
         });
       }
 
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
       const summaryData: any = {
         id: Date.now().toString(),
         title,
         content,
         documentId,
         domain: req.userDomain, // Add domain for workspace isolation
+        workspaceId: currentWorkspace, // Add workspace for team isolation
         updatedAt: new Date(),
       };
 
@@ -95,6 +113,17 @@ export const summaryController = {
 
       const summary = new Summary(summaryData);
       await summary.save();
+
+      // Publish event for workspace notification
+      await publishEvent({
+        actorUserId: req.user?._id?.toString?.(),
+        domain: req.userDomain!,
+        action: "summary.created",
+        resourceType: "summary",
+        resourceId: summary.id,
+        title: `New summary created: ${summary.title}`,
+        notifyWorkspace: true,
+      });
 
       res.status(201).json(summary);
     } catch (error) {
@@ -115,14 +144,50 @@ export const summaryController = {
         return res.status(404).json({ error: "Summary not found" });
       }
 
-      // Write HTML to a temp file
-      const tmpDir = os.tmpdir();
-      const htmlPath = path.join(tmpDir, `summary_${id}.html`);
-      const docxPath = path.join(tmpDir, `summary_${id}.docx`);
-      await writeFile(htmlPath, summary.content, "utf8");
+      // Prepare full HTML (wrap if only fragment provided)
+      const rawHtml = String(summary.content || "");
+      const html = /<html[\s\S]*?>[\s\S]*<\/html>/i.test(rawHtml)
+        ? rawHtml
+        : `<!DOCTYPE html><html><head><meta charset="UTF-8" /></head><body>${rawHtml}</body></html>`;
 
-      // Convert HTML to DOCX using Pandoc
-      await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
+      const safeTitle = (summary.title || "summary").replace(
+        /[^a-z0-9\-_. ]/gi,
+        "_"
+      );
+
+      let docxBuffer: Buffer | null = null;
+      // Try html-to-docx first (robust in Node)
+      try {
+        const mod: any = await import("html-to-docx");
+        const HTMLtoDOCX = mod.default || mod;
+        docxBuffer = (await HTMLtoDOCX(html, undefined, {
+          title: safeTitle,
+          description: "Generated from HTML",
+        })) as Buffer;
+      } catch (e) {
+        // Fallback to html-docx-js
+        try {
+          const blobOrBuffer: any = htmlDocx.asBlob(html);
+          if (Buffer.isBuffer(blobOrBuffer)) {
+            docxBuffer = blobOrBuffer as Buffer;
+          } else if (
+            blobOrBuffer &&
+            "arrayBuffer" in blobOrBuffer &&
+            typeof blobOrBuffer.arrayBuffer === "function"
+          ) {
+            const ab = await (blobOrBuffer as Blob).arrayBuffer();
+            docxBuffer = Buffer.from(ab);
+          } else {
+            docxBuffer = Buffer.from(String(blobOrBuffer) || "");
+          }
+        } catch (fallbackErr) {
+          console.error(
+            "Both html-to-docx and html-docx-js failed:",
+            fallbackErr
+          );
+          throw fallbackErr;
+        }
+      }
 
       // Send DOCX file
       res.setHeader(
@@ -131,15 +196,11 @@ export const summaryController = {
       );
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${summary.title || "summary"}.docx"`
+        `attachment; filename="${safeTitle}.docx"`
       );
-      res.sendFile(docxPath, async (err) => {
-        // Clean up temp files
-        await unlink(htmlPath);
-        await unlink(docxPath);
-      });
+      res.end(docxBuffer);
     } catch (error) {
-      console.error("Error generating DOCX with Pandoc:", error);
+      console.error("Error generating DOCX:", error);
       res.status(500).json({ error: "Failed to generate DOCX" });
     }
   },
@@ -201,7 +262,17 @@ export const summaryController = {
       }
 
       const summary = await Summary.findOneAndDelete(query).lean();
-
+      if (summary) {
+        await publishEvent({
+          actorUserId: req.user?._id?.toString?.(),
+          domain: req.userDomain!,
+          action: "summary.deleted",
+          resourceType: "summary",
+          resourceId: summary.id,
+          title: `Summary deleted: ${summary.title || summary.id}`,
+          notifyWorkspace: true,
+        });
+      }
       res.json({ message: "Summary deleted successfully" });
     } catch (error) {
       console.error("Error deleting summary:", error);

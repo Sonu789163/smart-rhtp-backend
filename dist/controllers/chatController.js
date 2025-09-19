@@ -7,7 +7,12 @@ const index_1 = require("../index");
 exports.chatController = {
     async getAll(req, res) {
         try {
-            const query = { domain: req.userDomain }; // Filter by user's domain
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const query = {
+                domain: req.userDomain, // Filter by user's domain
+                workspaceId: currentWorkspace, // Filter by user's workspace
+            };
             // Admins can see all chats in their domain, regular users see only their own
             if (req.user.role !== "admin") {
                 if (req.user.microsoftId) {
@@ -58,16 +63,20 @@ exports.chatController = {
         try {
             const user = req.user;
             const chatData = { ...req.body };
-            // Check if the document exists by id and belongs to user's domain
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            // Check if the document exists by id and belongs to user's domain and workspace
             const document = await Document_1.Document.findOne({
                 id: chatData.documentId,
                 domain: req.userDomain,
+                workspaceId: currentWorkspace,
             });
             if (!document) {
                 return res.status(404).json({ error: "Document not found" });
             }
-            // Add domain to chat data
+            // Add domain and workspace to chat data
             chatData.domain = req.userDomain;
+            chatData.workspaceId = currentWorkspace;
             if (user.microsoftId) {
                 chatData.microsoftId = user.microsoftId;
             }

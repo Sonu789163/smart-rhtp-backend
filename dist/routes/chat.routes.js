@@ -7,7 +7,7 @@ const express_1 = __importDefault(require("express"));
 const chatController_1 = require("../controllers/chatController");
 const auth_1 = require("../middleware/auth");
 const domainAuth_1 = require("../middleware/domainAuth");
-const rateLimitByUser_1 = require("../middleware/rateLimitByUser");
+const rateLimitByWorkspace_1 = require("../middleware/rateLimitByWorkspace");
 const router = express_1.default.Router();
 // Apply auth middleware to all routes
 router.use(auth_1.authMiddleware);
@@ -22,7 +22,7 @@ router.get("/admin/stats", (0, auth_1.authorize)(["admin"]), chatController_1.ch
 // Get chat history for a document
 router.get("/document/:documentId", chatController_1.chatController.getByDocumentId);
 // Create new chat (rate limited)
-router.post("/", (0, rateLimitByUser_1.rateLimitByUser)("chat:create", 200, 24 * 60 * 60 * 1000), chatController_1.chatController.create);
+router.post("/", (0, rateLimitByWorkspace_1.rateLimitByWorkspace)("chat:create", 1000, 24 * 60 * 60 * 1000), chatController_1.chatController.create);
 // Add message to chat
 router.post("/:chatId/messages", chatController_1.chatController.addMessage);
 // Update chat

@@ -10,6 +10,7 @@ const User_1 = require("../models/User");
 const nodemailer_1 = __importDefault(require("nodemailer"));
 const crypto_1 = __importDefault(require("crypto"));
 const domainConfig_1 = require("../config/domainConfig");
+const events_1 = require("../lib/events");
 // Helper to generate tokens
 const generateTokens = async (user) => {
     const accessToken = jsonwebtoken_1.default.sign({
@@ -64,6 +65,16 @@ exports.authController = {
                 role: role, // Make sure role is set
             });
             await user.save();
+            // Publish event for workspace notification
+            await (0, events_1.publishEvent)({
+                actorUserId: user._id.toString(),
+                domain: user.domain,
+                action: "user.registered",
+                resourceType: "user",
+                resourceId: user._id.toString(),
+                title: `New user registered: ${user.name || user.email}`,
+                notifyWorkspace: true,
+            });
             const tokens = await generateTokens(user);
             res.status(201).json({
                 ...tokens,

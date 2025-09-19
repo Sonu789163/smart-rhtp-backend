@@ -4,25 +4,145 @@ import axios from "axios";
 import FormData from "form-data";
 import { io } from "../index";
 import { r2Client, R2_BUCKET } from "../config/r2";
+import { publishEvent } from "../lib/events";
 import { GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 
 interface AuthRequest extends Request {
   user?: any;
   userDomain?: string;
+  currentWorkspace?: string;
 }
 
 export const documentController = {
+  // Helper to normalize namespace consistently (trim, drop trailing .pdf)
+  // Keep case as-is; rely on Mongo collation for case-insensitive uniqueness
+  normalizeNamespace(raw?: string) {
+    if (!raw) return "";
+    let s = String(raw).trim();
+    // Remove extension
+    s = s.replace(/\.pdf$/i, "");
+    // Standardize separators to spaces
+    s = s.replace(/[\-_]+/g, " ");
+    // Collapse multiple spaces
+    s = s.replace(/\s+/g, " ");
+    // Trim again
+    s = s.trim();
+    return s;
+  },
   async getAll(req: AuthRequest, res: Response) {
     try {
-      const { type } = (req.query || {}) as { type?: string };
-      const query: any = { domain: req.userDomain }; // Filter by user's domain
+      const { type, directoryId, includeDeleted } = (req.query || {}) as {
+        type?: string;
+        directoryId?: string;
+        includeDeleted?: string;
+      };
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      const query: any = {
+        domain: req.userDomain, // Still filter by domain for security
+        workspaceId: currentWorkspace, // Filter by workspace for isolation
+      };
 
       // If a type filter is provided, use it
       if (type === "DRHP" || type === "RHP") {
         query.type = type;
       }
 
-      // All users can see all documents within their domain
+      // Enforce time-bucket permissions based on user's accessibleWorkspaces
+      const user = (req as any).user;
+      const wsEntry = Array.isArray(user?.accessibleWorkspaces)
+        ? user.accessibleWorkspaces.find(
+            (w: any) => w.workspaceDomain === req.userDomain && w.isActive
+          )
+        : undefined;
+
+      // Default to all if no entry found (backward compatibility)
+      let allowedBuckets: string[] = wsEntry?.allowedTimeBuckets || ["all"];
+
+      // Always allow admins full access
+      if (user?.role === "admin") {
+        allowedBuckets = ["all"];
+      }
+
+      // If this is the user's primary domain, allow all
+      if (
+        (user?.domain || "").toLowerCase() ===
+        (req.userDomain || "").toLowerCase()
+      ) {
+        allowedBuckets = ["all"];
+      }
+
+      // Build date range conditions
+      if (!allowedBuckets.includes("all")) {
+        const now = new Date();
+
+        // Use the most restrictive time bucket (shortest time range)
+        // Priority: today > last7 > last15 > last30 > last90
+        let selectedBucket = null;
+
+        if (allowedBuckets.includes("today")) {
+          selectedBucket = "today";
+        } else if (allowedBuckets.includes("last7")) {
+          selectedBucket = "last7";
+        } else if (allowedBuckets.includes("last15")) {
+          selectedBucket = "last15";
+        } else if (allowedBuckets.includes("last30")) {
+          selectedBucket = "last30";
+        } else if (allowedBuckets.includes("last90")) {
+          selectedBucket = "last90";
+        }
+
+        if (selectedBucket) {
+          let start: Date;
+
+          if (selectedBucket === "today") {
+            start = new Date();
+            start.setUTCHours(0, 0, 0, 0);
+            query.uploadedAt = { $gte: start, $lte: now };
+          } else if (selectedBucket === "last7") {
+            start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            query.uploadedAt = { $gte: start, $lte: now };
+          } else if (selectedBucket === "last15") {
+            start = new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000);
+            query.uploadedAt = { $gte: start, $lte: now };
+          } else if (selectedBucket === "last30") {
+            start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            query.uploadedAt = { $gte: start, $lte: now };
+          } else if (selectedBucket === "last90") {
+            start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+            query.uploadedAt = { $gte: start, $lte: now };
+          }
+        }
+      }
+
+      // Apply explicit overrides if present
+      if (wsEntry?.extraDocumentIds?.length) {
+        // If there are extra documents, we need to include them regardless of time filtering
+        const extraDocsQuery = { id: { $in: wsEntry.extraDocumentIds } };
+
+        if (query.uploadedAt) {
+          // If we have time filtering, use $or to include both time-filtered docs and extra docs
+          query.$or = [{ uploadedAt: query.uploadedAt }, extraDocsQuery];
+          delete query.uploadedAt; // Remove the direct time filter since we're using $or
+        } else {
+          // No time filtering, just add extra docs
+          query.$or = query.$or || [];
+          query.$or.push(extraDocsQuery);
+        }
+      }
+
+      if (wsEntry?.blockedDocumentIds?.length) {
+        query.id = { $nin: wsEntry.blockedDocumentIds };
+      }
+
+      if (directoryId === "root") {
+        query.directoryId = null;
+      } else if (typeof directoryId === "string") {
+        query.directoryId = directoryId;
+      }
+
+      // no trash filter; return all in directory
 
       const documents = await Document.find(query).sort({ uploadedAt: -1 });
       res.json(documents);
@@ -33,10 +153,26 @@ export const documentController = {
 
   async getById(req: AuthRequest, res: Response) {
     try {
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
       const query: any = {
         id: req.params.id,
         domain: req.userDomain, // Ensure user can only access documents from their domain
+        workspaceId: currentWorkspace, // Ensure user can only access documents from their workspace
       };
+
+      // Check for link access
+      const linkAccess = (req as any).linkAccess;
+      if (
+        linkAccess &&
+        linkAccess.resourceType === "document" &&
+        linkAccess.resourceId === req.params.id
+      ) {
+        // Allow access via link token
+        query.domain = linkAccess.domain;
+      }
+
       const document = await Document.findOne(query);
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
@@ -54,10 +190,38 @@ export const documentController = {
       if (!docData.namespace) {
         docData.namespace = docData.name;
       }
-      // Add domain to document data
+      docData.namespace = documentController.normalizeNamespace(
+        docData.namespace
+      );
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      // Add domain and workspace to document data
       docData.domain = req.userDomain;
+      docData.workspaceId = currentWorkspace;
+
+      // Check duplicate by namespace within workspace
+      const existing = await Document.findOne({
+        workspaceId: currentWorkspace,
+        namespace: docData.namespace,
+      }).collation({ locale: "en", strength: 2 });
+      if (existing) {
+        return res.status(409).json({
+          error: "Document with this namespace already exists",
+          existingDocument: existing,
+        });
+      }
       const document = new Document(docData);
       await document.save();
+      await publishEvent({
+        actorUserId: (req as any).user?._id?.toString?.(),
+        domain: (req as any).userDomain,
+        action: "document.uploaded",
+        resourceType: "document",
+        resourceId: document.id,
+        title: `Document uploaded: ${document.name}`,
+        notifyWorkspace: true,
+      });
       res.status(201).json(document);
     } catch (error) {
       console.error("Error creating document:", error);
@@ -67,11 +231,20 @@ export const documentController = {
 
   async update(req: AuthRequest, res: Response) {
     try {
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
       const query: any = {
         id: req.params.id,
         domain: req.userDomain, // Ensure user can only update documents from their domain
+        workspaceId: currentWorkspace, // Ensure user can only update documents from their workspace
       };
-      const document = await Document.findOneAndUpdate(query, req.body, {
+      const update: any = { ...req.body };
+      if (typeof req.body?.directoryId !== "undefined") {
+        update.directoryId =
+          req.body.directoryId === "root" ? null : req.body.directoryId;
+      }
+      const document = await Document.findOneAndUpdate(query, update, {
         new: true,
       });
       if (!document) {
@@ -83,18 +256,24 @@ export const documentController = {
     }
   },
 
+  // restore disabled while trash functionality is off
+
   async delete(req: AuthRequest, res: Response) {
     try {
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
       const query: any = {
         id: req.params.id,
         domain: req.userDomain, // Ensure user can only delete documents from their domain
+        workspaceId: currentWorkspace, // Ensure user can only delete documents from their workspace
       };
       const document = await Document.findOne(query);
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
 
-      // Delete file from R2
+      // HARD DELETE: remove file(s) from R2 and Mongo based on type
       if (document.fileKey) {
         try {
           const deleteCommand = new DeleteObjectCommand({
@@ -124,22 +303,46 @@ export const documentController = {
             await Document.deleteOne({ id: document.relatedRhpId });
           }
         }
-        // Delete DRHP document from MongoDB
         await Document.deleteOne({ id: document.id });
+        // Publish delete event
+        await publishEvent({
+          actorUserId: (req as any).user?._id?.toString?.(),
+          domain: (req as any).userDomain,
+          action: "document.deleted",
+          resourceType: "document",
+          resourceId: document.id,
+          title: `Document deleted: ${document.name}`,
+          notifyWorkspace: true,
+        });
         res.json({ message: "DRHP and related RHP deleted successfully" });
       } else if (document.type === "RHP") {
-        // If deleting an RHP, remove the reference from the DRHP
         const drhpDoc = await Document.findOne({ relatedRhpId: document.id });
         if (drhpDoc) {
-          drhpDoc.relatedRhpId = undefined;
+          drhpDoc.relatedRhpId = undefined as any;
           await drhpDoc.save();
         }
-        // Delete RHP document from MongoDB
         await Document.deleteOne({ id: document.id });
+        await publishEvent({
+          actorUserId: (req as any).user?._id?.toString?.(),
+          domain: (req as any).userDomain,
+          action: "document.deleted",
+          resourceType: "document",
+          resourceId: document.id,
+          title: `Document deleted: ${document.name}`,
+          notifyWorkspace: true,
+        });
         res.json({ message: "RHP deleted successfully" });
       } else {
-        // Generic document deletion
         await Document.deleteOne({ id: document.id });
+        await publishEvent({
+          actorUserId: (req as any).user?._id?.toString?.(),
+          domain: (req as any).userDomain,
+          action: "document.deleted",
+          resourceType: "document",
+          resourceId: document.id,
+          title: `Document deleted: ${document.name}`,
+          notifyWorkspace: true,
+        });
         res.json({ message: "Document deleted successfully" });
       }
     } catch (error) {
@@ -148,7 +351,7 @@ export const documentController = {
     }
   },
 
-  async uploadDocument(req: Request, res: Response) {
+  async uploadDocument(req: AuthRequest, res: Response) {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -161,10 +364,26 @@ export const documentController = {
         id: req.body.id || fileKey, // Use provided id from frontend or fallback to fileKey
         name: originalname,
         fileKey: fileKey,
-        namespace: req.body.namespace || originalname,
+        namespace: documentController.normalizeNamespace(
+          req.body.namespace || originalname
+        ),
         type: "DRHP", // Set type for DRHP documents
         domain: user.domain, // Add domain for workspace isolation
+        workspaceId: req.currentWorkspace || user.domain, // Add workspace for team isolation
+        directoryId:
+          req.body.directoryId === "root" ? null : req.body.directoryId || null,
       };
+      // Pre-check duplicate by namespace within workspace
+      const duplicate = await Document.findOne({
+        workspaceId: docData.workspaceId,
+        namespace: docData.namespace,
+      }).collation({ locale: "en", strength: 2 });
+      if (duplicate) {
+        return res.status(409).json({
+          error: "Document with this namespace already exists",
+          existingDocument: duplicate,
+        });
+      }
       if (user?.microsoftId) {
         docData.microsoftId = user.microsoftId;
       } else if (user?._id) {
@@ -172,6 +391,17 @@ export const documentController = {
       }
       const document = new Document(docData);
       await document.save();
+
+      // Publish event for upload
+      await publishEvent({
+        actorUserId: (req as any).user?._id?.toString?.(),
+        domain: (req as any).userDomain,
+        action: "document.uploaded",
+        resourceType: "document",
+        resourceId: document.id,
+        title: `Document uploaded: ${document.name}`,
+        notifyWorkspace: true,
+      });
 
       // Notify n8n for further processing
       const n8nWebhookUrl =
@@ -209,7 +439,7 @@ export const documentController = {
     }
   },
 
-  async downloadDocument(req: Request, res: Response) {
+  async downloadDocument(req: AuthRequest, res: Response) {
     try {
       const document = await Document.findOne({ id: req.params.id });
       if (!document || !document.fileKey) {
@@ -249,12 +479,22 @@ export const documentController = {
           .json({ error: "Namespace parameter is required" });
       }
 
+      const normalized = documentController.normalizeNamespace(
+        namespace as string
+      );
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
       const query: any = {
-        namespace: namespace as string,
+        namespace: normalized,
         domain: req.userDomain, // Check within user's domain only
+        workspaceId: currentWorkspace, // Check within user's workspace only
       };
 
-      const existingDocument = await Document.findOne(query);
+      const existingDocument = await Document.findOne(query).collation({
+        locale: "en",
+        strength: 2,
+      });
 
       if (existingDocument) {
         res.json({
@@ -274,7 +514,7 @@ export const documentController = {
     }
   },
 
-  async uploadStatusUpdate(req: Request, res: Response) {
+  async uploadStatusUpdate(req: AuthRequest, res: Response) {
     try {
       const { jobId, status, error } = req.body;
       if (!jobId || !status) {
@@ -298,7 +538,7 @@ export const documentController = {
     }
   },
 
-  async uploadRhp(req: Request, res: Response) {
+  async uploadRhp(req: AuthRequest, res: Response) {
     try {
       const { drhpId } = req.body;
       if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -322,6 +562,7 @@ export const documentController = {
         type: "RHP",
         relatedDrhpId: drhp.id,
         domain: user.domain, // Add domain for workspace isolation
+        workspaceId: req.currentWorkspace || user.domain, // Add workspace for team isolation
       };
 
       // Add user information if available

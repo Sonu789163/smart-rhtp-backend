@@ -34,7 +34,8 @@ export function rateLimitByUser(
     | "document:create"
     | "document:upload"
     | "chat:create"
-    | "report:create",
+    | "report:create"
+    | "workspace:invite",
   limit: number,
   windowMs: number
 ) {

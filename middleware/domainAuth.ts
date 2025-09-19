@@ -4,6 +4,7 @@ import { User } from "../models/User";
 interface AuthRequest extends Request {
   user?: any;
   userDomain?: string;
+  currentWorkspace?: string;
 }
 
 export const domainAuthMiddleware = async (
@@ -12,21 +13,110 @@ export const domainAuthMiddleware = async (
   next: NextFunction
 ) => {
   try {
+    // Check for link access first
+    const linkAccess = (req as any).linkAccess;
+    if (linkAccess) {
+      // Set domain from link access
+      req.userDomain = linkAccess.domain;
+      req.currentWorkspace = linkAccess.domain;
+      return next();
+    }
+
     if (!req.user) {
       return res.status(401).json({ message: "Authentication required" });
     }
 
-    // Get user's domain from the authenticated user
-    const userDomain = req.user.domain;
+    // Get user's current workspace from the request or user's currentWorkspace
+    const requestedWorkspace =
+      (req.headers["x-workspace"] as string) || req.user.currentWorkspace;
 
-    if (!userDomain) {
+    // Get user with workspace access information
+    const user = await User.findById(req.user._id).select(
+      "domain accessibleWorkspaces currentWorkspace"
+    );
+
+    if (!user) {
       return res.status(400).json({
-        message: "User domain not found. Please contact administrator.",
+        message: "User not found. Please contact administrator.",
       });
     }
 
-    // Add user's domain to request for use in controllers
-    req.userDomain = userDomain;
+    // Initialize accessibleWorkspaces if it doesn't exist (for existing users)
+    if (!user.accessibleWorkspaces) {
+      user.accessibleWorkspaces = [];
+    }
+
+    // Initialize currentWorkspace if it doesn't exist (for existing users)
+    if (!user.currentWorkspace) {
+      user.currentWorkspace = user.domain;
+    }
+
+    // First, ensure no duplicates exist (keep first occurrence)
+    const seenDomains: Record<string, boolean> = {};
+    const originalLength = user.accessibleWorkspaces.length;
+    user.accessibleWorkspaces = user.accessibleWorkspaces.filter((ws: any) => {
+      const key = (ws.workspaceDomain || "").toLowerCase();
+      if (seenDomains[key]) return false;
+      seenDomains[key] = true;
+      return true;
+    });
+
+    // Add user's primary domain to accessible workspaces if not already present
+    const hasPrimaryDomainAccess = user.accessibleWorkspaces.some(
+      (ws: any) =>
+        (ws.workspaceDomain || "").toLowerCase() ===
+          (user.domain || "").toLowerCase() && ws.isActive
+    );
+
+    if (!hasPrimaryDomainAccess) {
+      user.accessibleWorkspaces.push({
+        workspaceDomain: user.domain,
+        workspaceName: `${user.domain} Workspace`,
+        role: "user", // All users get "user" role in accessibleWorkspaces, admin status is separate
+        // Primary domain members should see all documents by default
+        allowedTimeBuckets: ["all"],
+        extraDocumentIds: [],
+        blockedDocumentIds: [],
+        invitedBy: user._id,
+        joinedAt: new Date(),
+        isActive: true,
+      });
+    }
+
+    // Save user if we made any changes
+    const hasChanges =
+      !user.currentWorkspace ||
+      !hasPrimaryDomainAccess ||
+      user.accessibleWorkspaces.length !== originalLength;
+
+    if (hasChanges) {
+      await user.save();
+    }
+
+    // Determine which workspace to use
+    let workspaceDomain = user.domain; // Default to user's primary domain
+
+    if (requestedWorkspace) {
+      // Check if user has access to the requested workspace
+      const hasAccess = user.accessibleWorkspaces.some(
+        (ws: any) => ws.workspaceDomain === requestedWorkspace && ws.isActive
+      );
+
+      if (hasAccess) {
+        workspaceDomain = requestedWorkspace;
+      } else {
+        return res.status(403).json({
+          message: "You don't have access to this workspace",
+        });
+      }
+    } else {
+      // Use user's current workspace or primary domain
+      workspaceDomain = user.currentWorkspace || user.domain;
+    }
+
+    // Add workspace domain to request for use in controllers
+    req.userDomain = workspaceDomain;
+    req.currentWorkspace = workspaceDomain;
     next();
   } catch (error) {
     console.error("Domain authentication error:", error);

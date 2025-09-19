@@ -15,6 +15,13 @@ const summary_routes_1 = __importDefault(require("./routes/summary.routes"));
 const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
 const report_routes_1 = __importDefault(require("./routes/report.routes"));
 const user_routes_1 = __importDefault(require("./routes/user.routes"));
+const workspaceInvitation_routes_1 = __importDefault(require("./routes/workspaceInvitation.routes"));
+const publicInvitation_routes_1 = __importDefault(require("./routes/publicInvitation.routes"));
+const directory_routes_1 = __importDefault(require("./routes/directory.routes"));
+// import trashRoutes from "./routes/trash.routes";
+const share_routes_1 = __importDefault(require("./routes/share.routes"));
+const notification_routes_1 = __importDefault(require("./routes/notification.routes"));
+const workspace_routes_1 = __importDefault(require("./routes/workspace.routes"));
 const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
 const helmet_1 = __importDefault(require("helmet"));
@@ -54,8 +61,10 @@ const limiter = (0, express_rate_limit_1.default)({
 });
 app.use(limiter);
 // MongoDB Connection
-const MONGODB_URI = process.env.MONGODB_URI ||
-    "mongodb+srv://Sonu7891:Sonu1234@cluster0.qfv4x.mongodb.net/pdf-summarizer";
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+    throw new Error("MONGODB_URI is not set");
+}
 mongoose_1.default
     .connect(MONGODB_URI)
     .then(() => {
@@ -71,6 +80,13 @@ app.use("/api/chats", chat_routes_1.default);
 app.use("/api/summaries", summary_routes_1.default);
 app.use("/api/reports", report_routes_1.default);
 app.use("/api/users", user_routes_1.default);
+app.use("/api/workspace-invitations", workspaceInvitation_routes_1.default);
+app.use("/api/invitation", publicInvitation_routes_1.default);
+app.use("/api/directories", directory_routes_1.default);
+// app.use("/api/trash", trashRoutes); // disabled for now
+app.use("/api/shares", share_routes_1.default);
+app.use("/api/notifications", notification_routes_1.default);
+app.use("/api/workspaces", workspace_routes_1.default);
 // Health check endpoint
 app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });

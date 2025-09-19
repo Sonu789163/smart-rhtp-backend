@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -6,19 +39,24 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.summaryController = void 0;
 const Summary_1 = require("../models/Summary");
 const axios_1 = __importDefault(require("axios"));
-const promises_1 = require("fs/promises");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
-const path_1 = __importDefault(require("path"));
-const os_1 = __importDefault(require("os"));
+const html_docx_js_1 = __importDefault(require("html-docx-js"));
 const index_1 = require("../index");
+const events_1 = require("../lib/events");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.summaryController = {
     async getAll(req, res) {
         try {
-            const query = { domain: req.userDomain }; // Filter by user's domain
-            // Admins can see all summaries in their domain, regular users see only their own
-            if (req.user.role !== "admin") {
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const query = {
+                domain: req.userDomain, // Filter by user's domain
+                workspaceId: currentWorkspace, // Filter by user's workspace
+            };
+            const link = req.linkAccess;
+            // Admins or link access can see all summaries in domain
+            if (!link && req.user && req.user.role !== "admin") {
                 if (req.user.microsoftId) {
                     query.microsoftId = req.user.microsoftId;
                 }
@@ -37,12 +75,15 @@ exports.summaryController = {
     async getByDocumentId(req, res) {
         try {
             const { documentId } = req.params;
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
             const query = {
                 documentId,
                 domain: req.userDomain, // Filter by user's domain
+                workspaceId: currentWorkspace, // Filter by user's workspace
             };
-            // Admins can see all summaries in their domain, regular users see only their own
-            if (req.user.role !== "admin") {
+            const link = req.linkAccess;
+            if (!link && req.user && req.user.role !== "admin") {
                 if (req.user.microsoftId) {
                     query.microsoftId = req.user.microsoftId;
                 }
@@ -61,6 +102,7 @@ exports.summaryController = {
         }
     },
     async create(req, res) {
+        var _a, _b, _c;
         try {
             const { title, content, documentId } = req.body;
             if (!title || !content || !documentId) {
@@ -69,12 +111,15 @@ exports.summaryController = {
                     required: { title, content, documentId },
                 });
             }
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
             const summaryData = {
                 id: Date.now().toString(),
                 title,
                 content,
                 documentId,
                 domain: req.userDomain, // Add domain for workspace isolation
+                workspaceId: currentWorkspace, // Add workspace for team isolation
                 updatedAt: new Date(),
             };
             // Add user information if available
@@ -88,6 +133,16 @@ exports.summaryController = {
             }
             const summary = new Summary_1.Summary(summaryData);
             await summary.save();
+            // Publish event for workspace notification
+            await (0, events_1.publishEvent)({
+                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                domain: req.userDomain,
+                action: "summary.created",
+                resourceType: "summary",
+                resourceId: summary.id,
+                title: `New summary created: ${summary.title}`,
+                notifyWorkspace: true,
+            });
             res.status(201).json(summary);
         }
         catch (error) {
@@ -106,24 +161,51 @@ exports.summaryController = {
             if (!summary || !summary.content) {
                 return res.status(404).json({ error: "Summary not found" });
             }
-            // Write HTML to a temp file
-            const tmpDir = os_1.default.tmpdir();
-            const htmlPath = path_1.default.join(tmpDir, `summary_${id}.html`);
-            const docxPath = path_1.default.join(tmpDir, `summary_${id}.docx`);
-            await (0, promises_1.writeFile)(htmlPath, summary.content, "utf8");
-            // Convert HTML to DOCX using Pandoc
-            await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
+            // Prepare full HTML (wrap if only fragment provided)
+            const rawHtml = String(summary.content || "");
+            const html = /<html[\s\S]*?>[\s\S]*<\/html>/i.test(rawHtml)
+                ? rawHtml
+                : `<!DOCTYPE html><html><head><meta charset="UTF-8" /></head><body>${rawHtml}</body></html>`;
+            const safeTitle = (summary.title || "summary").replace(/[^a-z0-9\-_. ]/gi, "_");
+            let docxBuffer = null;
+            // Try html-to-docx first (robust in Node)
+            try {
+                const mod = await Promise.resolve().then(() => __importStar(require("html-to-docx")));
+                const HTMLtoDOCX = mod.default || mod;
+                docxBuffer = (await HTMLtoDOCX(html, undefined, {
+                    title: safeTitle,
+                    description: "Generated from HTML",
+                }));
+            }
+            catch (e) {
+                // Fallback to html-docx-js
+                try {
+                    const blobOrBuffer = html_docx_js_1.default.asBlob(html);
+                    if (Buffer.isBuffer(blobOrBuffer)) {
+                        docxBuffer = blobOrBuffer;
+                    }
+                    else if (blobOrBuffer &&
+                        "arrayBuffer" in blobOrBuffer &&
+                        typeof blobOrBuffer.arrayBuffer === "function") {
+                        const ab = await blobOrBuffer.arrayBuffer();
+                        docxBuffer = Buffer.from(ab);
+                    }
+                    else {
+                        docxBuffer = Buffer.from(String(blobOrBuffer) || "");
+                    }
+                }
+                catch (fallbackErr) {
+                    console.error("Both html-to-docx and html-docx-js failed:", fallbackErr);
+                    throw fallbackErr;
+                }
+            }
             // Send DOCX file
             res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-            res.setHeader("Content-Disposition", `attachment; filename="${summary.title || "summary"}.docx"`);
-            res.sendFile(docxPath, async (err) => {
-                // Clean up temp files
-                await (0, promises_1.unlink)(htmlPath);
-                await (0, promises_1.unlink)(docxPath);
-            });
+            res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.docx"`);
+            res.end(docxBuffer);
         }
         catch (error) {
-            console.error("Error generating DOCX with Pandoc:", error);
+            console.error("Error generating DOCX:", error);
             res.status(500).json({ error: "Failed to generate DOCX" });
         }
     },
@@ -164,6 +246,7 @@ exports.summaryController = {
         }
     },
     async delete(req, res) {
+        var _a, _b, _c;
         try {
             const { id } = req.params;
             const query = {
@@ -183,6 +266,17 @@ exports.summaryController = {
                 }
             }
             const summary = await Summary_1.Summary.findOneAndDelete(query).lean();
+            if (summary) {
+                await (0, events_1.publishEvent)({
+                    actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                    domain: req.userDomain,
+                    action: "summary.deleted",
+                    resourceType: "summary",
+                    resourceId: summary.id,
+                    title: `Summary deleted: ${summary.title || summary.id}`,
+                    notifyWorkspace: true,
+                });
+            }
             res.json({ message: "Summary deleted successfully" });
         }
         catch (error) {

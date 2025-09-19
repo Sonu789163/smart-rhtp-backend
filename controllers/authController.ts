@@ -5,6 +5,7 @@ import { User } from "../models/User";
 import nodemailer from "nodemailer";
 import crypto from "crypto";
 import { validateEmail, getPrimaryDomain } from "../config/domainConfig";
+import { publishEvent } from "../lib/events";
 
 // Helper to generate tokens
 const generateTokens = async (user: any) => {
@@ -76,6 +77,17 @@ export const authController = {
       });
 
       await user.save();
+
+      // Publish event for workspace notification
+      await publishEvent({
+        actorUserId: user._id.toString(),
+        domain: user.domain,
+        action: "user.registered",
+        resourceType: "user",
+        resourceId: user._id.toString(),
+        title: `New user registered: ${user.name || user.email}`,
+        notifyWorkspace: true,
+      });
 
       const tokens = await generateTokens(user);
       res.status(201).json({

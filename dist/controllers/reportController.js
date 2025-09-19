@@ -7,6 +7,7 @@ exports.reportController = void 0;
 const Report_1 = require("../models/Report");
 const axios_1 = __importDefault(require("axios"));
 const index_1 = require("../index");
+const events_1 = require("../lib/events");
 const promises_1 = require("fs/promises");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
@@ -16,9 +17,15 @@ const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.reportController = {
     async getAll(req, res) {
         try {
-            const query = { domain: req.userDomain }; // Filter by user's domain
-            // Admins can see all reports in their domain, regular users see only their own
-            if (req.user.role !== "admin") {
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const query = {
+                domain: req.userDomain, // Filter by user's domain
+                workspaceId: currentWorkspace, // Filter by user's workspace
+            };
+            const link = req.linkAccess;
+            // Admins or link access can see all reports in domain
+            if (!link && req.user && req.user.role !== "admin") {
                 if (req.user.microsoftId) {
                     query.microsoftId = req.user.microsoftId;
                 }
@@ -52,6 +59,7 @@ exports.reportController = {
         }
     },
     async create(req, res) {
+        var _a, _b, _c;
         try {
             const { title, content, drhpId, rhpId, drhpNamespace, rhpNamespace } = req.body;
             if (!title ||
@@ -72,6 +80,8 @@ exports.reportController = {
                     },
                 });
             }
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
             const reportData = {
                 id: Date.now().toString(),
                 title,
@@ -81,6 +91,7 @@ exports.reportController = {
                 drhpNamespace,
                 rhpNamespace,
                 domain: req.userDomain, // Add domain for workspace isolation
+                workspaceId: currentWorkspace, // Add workspace for team isolation
                 updatedAt: new Date(),
             };
             // Add user information if available
@@ -94,6 +105,16 @@ exports.reportController = {
             }
             const report = new Report_1.Report(reportData);
             await report.save();
+            // Publish event for workspace notification
+            await (0, events_1.publishEvent)({
+                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                domain: req.userDomain,
+                action: "report.created",
+                resourceType: "report",
+                resourceId: report.id,
+                title: `New report created: ${report.title}`,
+                notifyWorkspace: true,
+            });
             res.status(201).json(report);
         }
         catch (error) {
@@ -184,6 +205,7 @@ exports.reportController = {
         }
     },
     async delete(req, res) {
+        var _a, _b, _c;
         try {
             const query = {
                 id: req.params.id,
@@ -206,6 +228,15 @@ exports.reportController = {
                 return res.status(404).json({ error: "Report not found" });
             }
             await report.deleteOne();
+            await (0, events_1.publishEvent)({
+                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                domain: req.userDomain,
+                action: "report.deleted",
+                resourceType: "report",
+                resourceId: report.id,
+                title: `Report deleted: ${report.title || report.id}`,
+                notifyWorkspace: true,
+            });
             res.json({ message: "Report deleted successfully" });
         }
         catch (error) {

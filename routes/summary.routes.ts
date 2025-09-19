@@ -2,13 +2,17 @@ import express from "express";
 import { summaryController } from "../controllers/summaryController";
 import { authMiddleware } from "../middleware/auth";
 import { domainAuthMiddleware } from "../middleware/domainAuth";
-import { rateLimitByUser } from "../middleware/rateLimitByUser";
+import { rateLimitByWorkspace } from "../middleware/rateLimitByWorkspace";
+import { requireBodyDocumentPermission, requireSummaryPermission } from "../middleware/permissions";
 
 const router = express.Router();
 
-// Apply auth middleware to all routes
+// Enable link access to summaries of shared documents
+import { linkAccess } from "../middleware/linkAccess";
+router.use(linkAccess);
+// Apply auth (skipped if linkToken provided)
 router.use(authMiddleware);
-// Apply domain middleware to all routes
+// Apply domain (respects link domain)
 router.use(domainAuthMiddleware);
 
 // Get all summaries for the user
@@ -33,15 +37,16 @@ router.get("/document/:documentId", summaryController.getByDocumentId);
 // Create new summary (rate limited)
 router.post(
   "/create",
-  rateLimitByUser("summary:create", 40, 24 * 60 * 60 * 1000),
+  rateLimitByWorkspace("summary:create", 300, 24 * 60 * 60 * 1000),
+  requireBodyDocumentPermission("documentId", "editor"),
   summaryController.create
 );
 
 // Update summary
-router.put("/:id", summaryController.update);
+router.put("/:id", requireSummaryPermission("id", "editor"), summaryController.update);
 
 // Delete summary
-router.delete("/:id", summaryController.delete);
+router.delete("/:id", requireSummaryPermission("id", "owner"), summaryController.delete);
 
 // Download DOCX for a summary
 router.get("/:id/download-docx", summaryController.downloadDocx);

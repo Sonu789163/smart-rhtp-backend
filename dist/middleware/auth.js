@@ -9,6 +9,12 @@ const User_1 = require("../models/User");
 const authMiddleware = async (req, res, next) => {
     var _a;
     try {
+        // Check for link access first - allow unauthenticated access via link
+        const linkToken = req.query.linkToken;
+        if (linkToken) {
+            // Skip authentication for link access - will be handled by linkAccess middleware
+            return next();
+        }
         const token = (_a = req.header("Authorization")) === null || _a === void 0 ? void 0 : _a.replace("Bearer ", "");
         if (!token) {
             return res
@@ -31,6 +37,15 @@ const authMiddleware = async (req, res, next) => {
             return res.status(403).json({ message: "Account is suspended" });
         }
         req.user = user;
+        // Extract workspace from headers
+        const workspaceHeader = req.header("x-workspace");
+        if (workspaceHeader) {
+            req.currentWorkspace = workspaceHeader;
+        }
+        else {
+            // Fallback to user's domain if no workspace header
+            req.currentWorkspace = user.domain;
+        }
         next();
     }
     catch (error) {
