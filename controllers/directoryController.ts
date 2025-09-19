@@ -6,13 +6,21 @@ import { publishEvent } from "../lib/events";
 interface AuthRequest extends Request {
   user?: any;
   userDomain?: string;
+  currentWorkspace?: string;
 }
 
 export const directoryController = {
   async move(req: AuthRequest, res: Response) {
     try {
       const { newParentId } = req.body || {};
-      const dir = await Directory.findOne({ id: req.params.id, domain: req.userDomain });
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      const dir = await Directory.findOne({
+        id: req.params.id,
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+      });
       if (!dir) {
         return res.status(404).json({ error: "Directory not found" });
       }
@@ -21,7 +29,11 @@ export const directoryController = {
       }
       // Validate new parent if provided
       if (newParentId) {
-        const parent = await Directory.findOne({ id: newParentId, domain: req.userDomain });
+        const parent = await Directory.findOne({
+          id: newParentId,
+          domain: req.userDomain,
+          workspaceId: currentWorkspace,
+        });
         if (!parent) {
           return res.status(400).json({ error: "Invalid destination folder" });
         }
@@ -31,7 +43,9 @@ export const directoryController = {
       res.json(dir);
     } catch (err: any) {
       if (err?.code === 11000) {
-        return res.status(409).json({ error: "A folder with this name already exists here" });
+        return res
+          .status(409)
+          .json({ error: "A folder with this name already exists here" });
       }
       res.status(500).json({ error: "Failed to move directory" });
     }
@@ -42,11 +56,15 @@ export const directoryController = {
       if (!name || String(name).trim() === "") {
         return res.status(400).json({ error: "Name is required" });
       }
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
       const payload: any = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         name: String(name).trim(),
         parentId: parentId === "root" || !parentId ? null : parentId,
         domain: req.userDomain,
+        workspaceId: currentWorkspace,
         ownerUserId: req.user?._id?.toString?.(),
       };
       const dir = new Directory(payload);
@@ -73,7 +91,14 @@ export const directoryController = {
 
   async getById(req: AuthRequest, res: Response) {
     try {
-      const dir = await Directory.findOne({ id: req.params.id, domain: req.userDomain });
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      const dir = await Directory.findOne({
+        id: req.params.id,
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+      });
       if (!dir) {
         return res.status(404).json({ error: "Directory not found" });
       }
@@ -86,20 +111,30 @@ export const directoryController = {
   async listChildren(req: AuthRequest, res: Response) {
     try {
       const parentId = req.params.id === "root" ? null : req.params.id;
-      const { includeDeleted, page, pageSize, sort, order } = (req.query || {}) as {
+      const { includeDeleted, page, pageSize, sort, order } = (req.query ||
+        {}) as {
         includeDeleted?: string;
         page?: string;
         pageSize?: string;
         sort?: string;
         order?: string;
       };
-      const filter: any = { domain: req.userDomain, parentId };
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      const filter: any = {
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+        parentId,
+      };
       const dirs = await Directory.find(filter).sort({ name: 1 });
 
       // Documents under this directory
-      const docFilter: any = { domain: req.userDomain };
+      const docFilter: any = {
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+      };
       docFilter.directoryId = parentId;
-      
 
       // Sorting
       const sortKey = sort === "uploadedAt" ? "uploadedAt" : "name";
@@ -131,7 +166,14 @@ export const directoryController = {
   async update(req: AuthRequest, res: Response) {
     try {
       const { name, parentId } = req.body || {};
-      const dir = await Directory.findOne({ id: req.params.id, domain: req.userDomain });
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      const dir = await Directory.findOne({
+        id: req.params.id,
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+      });
       if (!dir) {
         return res.status(404).json({ error: "Directory not found" });
       }
@@ -168,40 +210,53 @@ export const directoryController = {
 
   async delete(req: AuthRequest, res: Response) {
     try {
-      const dir = await Directory.findOne({ id: req.params.id, domain: req.userDomain });
+      // Get current workspace from request
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      const dir = await Directory.findOne({
+        id: req.params.id,
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+      });
       if (!dir) {
         return res.status(404).json({ error: "Directory not found" });
       }
-      
+
       // Get all descendant directories recursively
       const queue = [dir.id];
       const visited: Set<string> = new Set();
       const dirsToDelete: string[] = [];
-      
+
       while (queue.length) {
         const current = queue.shift()!;
         if (visited.has(current)) continue;
         visited.add(current);
         dirsToDelete.push(current);
-        
-        const children = await Directory.find({ domain: req.userDomain, parentId: current });
+
+        const children = await Directory.find({
+          domain: req.userDomain,
+          workspaceId: currentWorkspace,
+          parentId: current,
+        });
         for (const child of children) {
           if (!visited.has(child.id)) queue.push(child.id);
         }
       }
-      
+
       // Delete all documents in all directories
-      await Document.deleteMany({ 
-        domain: req.userDomain, 
-        directoryId: { $in: dirsToDelete } 
+      await Document.deleteMany({
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+        directoryId: { $in: dirsToDelete },
       });
-      
+
       // Delete all directories
-      await Directory.deleteMany({ 
-        domain: req.userDomain, 
-        id: { $in: dirsToDelete } 
+      await Directory.deleteMany({
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+        id: { $in: dirsToDelete },
       });
-      
+
       await publishEvent({
         actorUserId: req.user?._id?.toString?.(),
         domain: req.userDomain!,
@@ -211,12 +266,10 @@ export const directoryController = {
         title: `Folder permanently deleted: ${dir.name}`,
         notifyWorkspace: true,
       });
-      
+
       res.json({ message: "Directory and all contents permanently deleted" });
     } catch (err) {
       res.status(500).json({ error: "Failed to delete directory" });
     }
   },
 };
-
-

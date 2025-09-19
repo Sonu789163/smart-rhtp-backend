@@ -8,7 +8,13 @@ exports.directoryController = {
     async move(req, res) {
         try {
             const { newParentId } = req.body || {};
-            const dir = await Directory_1.Directory.findOne({ id: req.params.id, domain: req.userDomain });
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const dir = await Directory_1.Directory.findOne({
+                id: req.params.id,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+            });
             if (!dir) {
                 return res.status(404).json({ error: "Directory not found" });
             }
@@ -17,7 +23,11 @@ exports.directoryController = {
             }
             // Validate new parent if provided
             if (newParentId) {
-                const parent = await Directory_1.Directory.findOne({ id: newParentId, domain: req.userDomain });
+                const parent = await Directory_1.Directory.findOne({
+                    id: newParentId,
+                    domain: req.userDomain,
+                    workspaceId: currentWorkspace,
+                });
                 if (!parent) {
                     return res.status(400).json({ error: "Invalid destination folder" });
                 }
@@ -28,7 +38,9 @@ exports.directoryController = {
         }
         catch (err) {
             if ((err === null || err === void 0 ? void 0 : err.code) === 11000) {
-                return res.status(409).json({ error: "A folder with this name already exists here" });
+                return res
+                    .status(409)
+                    .json({ error: "A folder with this name already exists here" });
             }
             res.status(500).json({ error: "Failed to move directory" });
         }
@@ -40,11 +52,14 @@ exports.directoryController = {
             if (!name || String(name).trim() === "") {
                 return res.status(400).json({ error: "Name is required" });
             }
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
             const payload = {
                 id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                 name: String(name).trim(),
                 parentId: parentId === "root" || !parentId ? null : parentId,
                 domain: req.userDomain,
+                workspaceId: currentWorkspace,
                 ownerUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
             };
             const dir = new Directory_1.Directory(payload);
@@ -71,7 +86,13 @@ exports.directoryController = {
     },
     async getById(req, res) {
         try {
-            const dir = await Directory_1.Directory.findOne({ id: req.params.id, domain: req.userDomain });
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const dir = await Directory_1.Directory.findOne({
+                id: req.params.id,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+            });
             if (!dir) {
                 return res.status(404).json({ error: "Directory not found" });
             }
@@ -84,11 +105,21 @@ exports.directoryController = {
     async listChildren(req, res) {
         try {
             const parentId = req.params.id === "root" ? null : req.params.id;
-            const { includeDeleted, page, pageSize, sort, order } = (req.query || {});
-            const filter = { domain: req.userDomain, parentId };
+            const { includeDeleted, page, pageSize, sort, order } = (req.query ||
+                {});
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const filter = {
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+                parentId,
+            };
             const dirs = await Directory_1.Directory.find(filter).sort({ name: 1 });
             // Documents under this directory
-            const docFilter = { domain: req.userDomain };
+            const docFilter = {
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+            };
             docFilter.directoryId = parentId;
             // Sorting
             const sortKey = sort === "uploadedAt" ? "uploadedAt" : "name";
@@ -118,7 +149,13 @@ exports.directoryController = {
         var _a, _b, _c;
         try {
             const { name, parentId } = req.body || {};
-            const dir = await Directory_1.Directory.findOne({ id: req.params.id, domain: req.userDomain });
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const dir = await Directory_1.Directory.findOne({
+                id: req.params.id,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+            });
             if (!dir) {
                 return res.status(404).json({ error: "Directory not found" });
             }
@@ -154,7 +191,13 @@ exports.directoryController = {
     async delete(req, res) {
         var _a, _b, _c;
         try {
-            const dir = await Directory_1.Directory.findOne({ id: req.params.id, domain: req.userDomain });
+            // Get current workspace from request
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const dir = await Directory_1.Directory.findOne({
+                id: req.params.id,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+            });
             if (!dir) {
                 return res.status(404).json({ error: "Directory not found" });
             }
@@ -168,7 +211,11 @@ exports.directoryController = {
                     continue;
                 visited.add(current);
                 dirsToDelete.push(current);
-                const children = await Directory_1.Directory.find({ domain: req.userDomain, parentId: current });
+                const children = await Directory_1.Directory.find({
+                    domain: req.userDomain,
+                    workspaceId: currentWorkspace,
+                    parentId: current,
+                });
                 for (const child of children) {
                     if (!visited.has(child.id))
                         queue.push(child.id);
@@ -177,12 +224,14 @@ exports.directoryController = {
             // Delete all documents in all directories
             await Document_1.Document.deleteMany({
                 domain: req.userDomain,
-                directoryId: { $in: dirsToDelete }
+                workspaceId: currentWorkspace,
+                directoryId: { $in: dirsToDelete },
             });
             // Delete all directories
             await Directory_1.Directory.deleteMany({
                 domain: req.userDomain,
-                id: { $in: dirsToDelete }
+                workspaceId: currentWorkspace,
+                id: { $in: dirsToDelete },
             });
             await (0, events_1.publishEvent)({
                 actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),

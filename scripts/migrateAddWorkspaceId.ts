@@ -4,6 +4,7 @@ import { Document } from "../models/Document";
 import { Summary } from "../models/Summary";
 import { Chat } from "../models/Chat";
 import { Report } from "../models/Report";
+import { Directory } from "../models/Directory";
 
 dotenv.config();
 
@@ -96,6 +97,26 @@ async function migrateAddWorkspaceId() {
       );
     }
 
+    // Migrate Directories
+    console.log("Migrating Directories...");
+    const directoriesWithoutWorkspace = await Directory.find({
+      workspaceId: { $exists: false },
+    });
+    console.log(
+      `Found ${directoriesWithoutWorkspace.length} directories without workspaceId`
+    );
+
+    for (const directory of directoriesWithoutWorkspace) {
+      // Set workspaceId to domain for existing directories
+      await Directory.updateOne(
+        { _id: directory._id },
+        { $set: { workspaceId: directory.domain } }
+      );
+      console.log(
+        `Updated directory ${directory.id} with workspaceId: ${directory.domain}`
+      );
+    }
+
     console.log("Migration completed successfully!");
 
     // Verify migration
@@ -112,6 +133,9 @@ async function migrateAddWorkspaceId() {
     const remainingReports = await Report.countDocuments({
       workspaceId: { $exists: false },
     });
+    const remainingDirectories = await Directory.countDocuments({
+      workspaceId: { $exists: false },
+    });
 
     console.log(`Remaining documents without workspaceId: ${remainingDocs}`);
     console.log(
@@ -119,6 +143,9 @@ async function migrateAddWorkspaceId() {
     );
     console.log(`Remaining chats without workspaceId: ${remainingChats}`);
     console.log(`Remaining reports without workspaceId: ${remainingReports}`);
+    console.log(
+      `Remaining directories without workspaceId: ${remainingDirectories}`
+    );
   } catch (error) {
     console.error("Migration failed:", error);
   } finally {
