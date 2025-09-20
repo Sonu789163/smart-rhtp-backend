@@ -14,13 +14,12 @@ interface AuthRequest extends Request {
 }
 
 export const documentController = {
-  // Helper to normalize namespace consistently (trim, drop trailing .pdf)
+  // Helper to normalize namespace consistently (trim, preserve .pdf extension)
   // Keep case as-is; rely on Mongo collation for case-insensitive uniqueness
   normalizeNamespace(raw?: string) {
     if (!raw) return "";
     let s = String(raw).trim();
-    // Remove extension
-    s = s.replace(/\.pdf$/i, "");
+    // Keep .pdf extension - don't remove it
     // Standardize separators to spaces
     s = s.replace(/[\-_]+/g, " ");
     // Collapse multiple spaces
@@ -186,13 +185,11 @@ export const documentController = {
   async create(req: AuthRequest, res: Response) {
     try {
       const docData = { ...req.body };
-      // Ensure namespace is always set
+      // Ensure namespace is always set and preserve original name with .pdf extension
       if (!docData.namespace) {
         docData.namespace = docData.name;
       }
-      docData.namespace = documentController.normalizeNamespace(
-        docData.namespace
-      );
+      // Keep original namespace as-is to preserve .pdf extension
       // Get current workspace from request
       const currentWorkspace = req.currentWorkspace || req.userDomain;
 
@@ -359,14 +356,12 @@ export const documentController = {
       const originalname = req.file.originalname;
       const fileKey = (req.file as any).key;
       const user = (req as any).user;
-      // Use namespace from frontend if present, else fallback to originalname
+      // Use original filename for namespace to preserve .pdf extension
       const docData: any = {
         id: req.body.id || fileKey, // Use provided id from frontend or fallback to fileKey
         name: originalname,
         fileKey: fileKey,
-        namespace: documentController.normalizeNamespace(
-          req.body.namespace || originalname
-        ),
+        namespace: req.body.namespace || originalname, // Use original name directly to preserve .pdf
         type: "DRHP", // Set type for DRHP documents
         domain: user.domain, // Add domain for workspace isolation
         workspaceId: req.currentWorkspace || user.domain, // Add workspace for team isolation
@@ -479,14 +474,13 @@ export const documentController = {
           .json({ error: "Namespace parameter is required" });
       }
 
-      const normalized = documentController.normalizeNamespace(
-        namespace as string
-      );
+      // Use namespace as-is to preserve .pdf extension
+      const queryNamespace = namespace as string;
       // Get current workspace from request
       const currentWorkspace = req.currentWorkspace || req.userDomain;
 
       const query: any = {
-        namespace: normalized,
+        namespace: queryNamespace,
         domain: req.userDomain, // Check within user's domain only
         workspaceId: currentWorkspace, // Check within user's workspace only
       };
@@ -556,8 +550,8 @@ export const documentController = {
       const rhpDocData: any = {
         id: fileKey,
         fileKey: fileKey,
-        name: drhp.name,
-        namespace: drhp.namespace, // Keep original namespace for reference
+        name: req.file.originalname, // Use original filename with .pdf extension
+        namespace: req.file.originalname, // Use original filename with .pdf extension
         rhpNamespace: rhpNamespace,
         type: "RHP",
         relatedDrhpId: drhp.id,
