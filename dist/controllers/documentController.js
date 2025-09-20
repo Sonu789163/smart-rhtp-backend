@@ -342,7 +342,7 @@ exports.documentController = {
                 id: req.body.id || fileKey, // Use provided id from frontend or fallback to fileKey
                 name: originalname,
                 fileKey: fileKey,
-                namespace: req.body.namespace || originalname, // Use original name directly to preserve .pdf
+                namespace: originalname || req.body.namespace, // Use original name directly to preserve .pdf
                 type: "DRHP", // Set type for DRHP documents
                 domain: user.domain, // Add domain for workspace isolation
                 workspaceId: req.currentWorkspace || user.domain, // Add workspace for team isolation
