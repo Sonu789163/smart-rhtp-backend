@@ -11,13 +11,17 @@ const authController_1 = require("../controllers/authController");
 const Document_1 = require("../models/Document");
 const Chat_1 = require("../models/Chat");
 const Summary_1 = require("../models/Summary");
+const domainConfig_1 = require("../config/domainConfig");
+const events_1 = require("../lib/events");
 const router = express_1.default.Router();
 // --- Email/Password Routes ---
 router.post("/register", authController_1.authController.register);
+router.post("/register/verify-otp", authController_1.authController.verifyRegistrationOtp);
 router.post("/login", authController_1.authController.login);
 router.post("/refresh-token", authController_1.authController.refreshToken);
 router.post("/logout", authController_1.authController.logout);
 // Microsoft OAuth login
+// Returns the URL where the client should redirect the user to consent.
 router.get("/microsoft", (req, res) => {
     const authUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?` +
         `client_id=${process.env.CLIENT_ID}&` +
@@ -28,6 +32,8 @@ router.get("/microsoft", (req, res) => {
     res.json({ authUrl });
 });
 // Microsoft OAuth callback
+// Exchanges the authorization code for tokens, upserts a user, and redirects
+// back to the frontend with app JWTs in the query string.
 router.get("/callback", async (req, res) => {
     try {
         const { code } = req.query;
@@ -64,19 +70,37 @@ router.get("/callback", async (req, res) => {
         // Find or create user
         let user = await User_1.User.findOne({ microsoftId: userData.id });
         if (!user) {
+            const email = userData.userPrincipalName;
+            const domain = (0, domainConfig_1.getPrimaryDomain)(email);
             user = new User_1.User({
                 microsoftId: userData.id,
                 name: userData.displayName,
-                email: userData.userPrincipalName,
+                email,
+                domain,
                 createdAt: new Date(),
                 lastLogin: new Date(),
             });
             await user.save();
+            // Notify admins in this domain about new user
+            if (domain) {
+                await (0, events_1.publishEvent)({
+                    actorUserId: user._id.toString(),
+                    domain,
+                    action: "user.registered",
+                    resourceType: "user",
+                    resourceId: user._id.toString(),
+                    title: `New user registered: ${user.name || user.email}`,
+                    notifyAdminsOnly: true,
+                });
+            }
         }
         else {
             user.lastLogin = new Date();
             user.name = userData.displayName;
             user.email = userData.userPrincipalName;
+            if (!user.domain && user.email) {
+                user.domain = (0, domainConfig_1.getPrimaryDomain)(user.email) || user.domain;
+            }
             await user.save();
         }
         // Generate JWT token

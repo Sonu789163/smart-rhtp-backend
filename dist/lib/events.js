@@ -7,6 +7,8 @@ const User_1 = require("../models/User");
 function genId(prefix) {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
+// Resolve which users should be notified for a workspace-scoped event.
+// Includes primary domain users and (optionally) invited users with access.
 async function getWorkspaceUserIds(domain, actorUserId) {
     try {
         // Get users who have access to this workspace
@@ -42,7 +44,7 @@ async function getWorkspaceUserIds(domain, actorUserId) {
     }
 }
 async function publishEvent(evt) {
-    const { actorUserId, domain, action, resourceType, resourceId, title, metadata, notifyUserIds, notifyWorkspace } = evt;
+    const { actorUserId, domain, action, resourceType, resourceId, title, metadata, notifyUserIds, notifyWorkspace, notifyAdminsOnly } = evt;
     // Create activity log
     const log = new ActivityLog_1.ActivityLog({
         id: genId("act"),
@@ -59,6 +61,10 @@ async function publishEvent(evt) {
     let userIdsToNotify = [];
     if (notifyUserIds && notifyUserIds.length) {
         userIdsToNotify = notifyUserIds;
+    }
+    else if (notifyAdminsOnly) {
+        const admins = await User_1.User.find({ domain, role: 'admin' }).select('_id');
+        userIdsToNotify = admins.map(a => a._id.toString());
     }
     else if (notifyWorkspace) {
         userIdsToNotify = await getWorkspaceUserIds(domain, actorUserId);

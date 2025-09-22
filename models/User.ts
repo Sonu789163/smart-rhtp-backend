@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 
+// Core user record with domain, role and optional password (email/password users).
+// Also stores OTP flows for profile updates, password changes and registration.
 const userSchema = new mongoose.Schema({
   microsoftId: { type: String, unique: true, sparse: true },
   name: { type: String },
@@ -71,6 +73,10 @@ const userSchema = new mongoose.Schema({
   passwordChangeOTP: { type: String },
   passwordChangeOTPExpires: { type: Date },
   passwordChangePendingHash: { type: String },
+
+  // Registration email verification OTP flow
+  registrationOTP: { type: String },
+  registrationOTPExpires: { type: Date },
 });
 
 export const User = mongoose.model("User", userSchema);

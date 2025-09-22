@@ -6,6 +6,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.authorize = exports.authMiddleware = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const User_1 = require("../models/User");
+// Verifies Bearer JWT, loads the user, checks status, and attaches
+// `req.user` and `req.currentWorkspace` for downstream handlers.
 const authMiddleware = async (req, res, next) => {
     var _a;
     try {

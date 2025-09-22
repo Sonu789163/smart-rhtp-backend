@@ -204,6 +204,43 @@ const emailTemplates = {
     `,
     text: `Verify Password Change\n\nYour OTP is ${data.otp}. It expires in ${data.expiresMinutes || 10} minutes. If you did not request this change, secure your account immediately.`,
   }),
+  "registration-otp": (data: any) => ({
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Verify Your Email</title>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: #4B2A06; color: white; padding: 20px; text-align: center; }
+          .content { padding: 30px 20px; background: #f9f9f9; }
+          .code { font-size: 28px; letter-spacing: 8px; font-weight: bold; background: #fff; padding: 12px 16px; border-radius: 8px; display: inline-block; }
+          .footer { text-align: center; padding: 20px; color: #666; font-size: 14px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Verify Your Email</h1>
+          </div>
+          <div class="content">
+            <p>Hello,</p>
+            <p>Use the OTP code below to verify your email and complete your registration. This code will expire in ${data.expiresMinutes || 10} minutes.</p>
+            <p class="code">${data.otp}</p>
+            <p>If you did not attempt to register, you can ignore this email.</p>
+          </div>
+          <div class="footer">
+            <p>&copy; ${new Date().getFullYear()} ${process.env.APP_NAME || "RHP Document"}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+    text: `Verify Your Email\n\nYour OTP is ${data.otp}. It expires in ${data.expiresMinutes || 10} minutes. If you did not attempt to register, ignore this email.`,
+  }),
 };
 
 export const sendEmail = async (emailData: EmailData): Promise<void> => {

@@ -8,6 +8,8 @@ interface AuthRequest extends Request {
   currentWorkspace?: string;
 }
 
+// Verifies Bearer JWT, loads the user, checks status, and attaches
+// `req.user` and `req.currentWorkspace` for downstream handlers.
 export const authMiddleware = async (
   req: AuthRequest,
   res: Response,

@@ -7,6 +7,8 @@ interface AuthRequest extends Request {
   currentWorkspace?: string;
 }
 
+// Resolves the effective workspace/domain for the request using `x-workspace`,
+// link access, or the user's saved `currentWorkspace`, and stores it on req.
 export const domainAuthMiddleware = async (
   req: AuthRequest,
   res: Response,

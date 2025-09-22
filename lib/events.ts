@@ -2,6 +2,7 @@ import { ActivityLog } from "../models/ActivityLog";
 import { Notification } from "../models/Notification";
 import { User } from "../models/User";
 
+// Generic audit/notification event payload used across controllers
 type EventPayload = {
   actorUserId?: string;
   domain: string;
@@ -12,12 +13,15 @@ type EventPayload = {
   metadata?: Record<string, any>;
   notifyUserIds?: string[];
   notifyWorkspace?: boolean; // If true, notify all users in the workspace
+  notifyAdminsOnly?: boolean; // If true, notify only admins in the domain
 };
 
 function genId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Resolve which users should be notified for a workspace-scoped event.
+// Includes primary domain users and (optionally) invited users with access.
 async function getWorkspaceUserIds(domain: string, actorUserId?: string): Promise<string[]> {
   try {
     // Get users who have access to this workspace
@@ -58,7 +62,7 @@ async function getWorkspaceUserIds(domain: string, actorUserId?: string): Promis
 }
 
 export async function publishEvent(evt: EventPayload) {
-  const { actorUserId, domain, action, resourceType, resourceId, title, metadata, notifyUserIds, notifyWorkspace } = evt;
+  const { actorUserId, domain, action, resourceType, resourceId, title, metadata, notifyUserIds, notifyWorkspace, notifyAdminsOnly } = evt;
   
   // Create activity log
   const log = new ActivityLog({
@@ -78,6 +82,9 @@ export async function publishEvent(evt: EventPayload) {
   
   if (notifyUserIds && notifyUserIds.length) {
     userIdsToNotify = notifyUserIds;
+  } else if (notifyAdminsOnly) {
+    const admins = await User.find({ domain, role: 'admin' }).select('_id');
+    userIdsToNotify = admins.map(a => a._id.toString());
   } else if (notifyWorkspace) {
     userIdsToNotify = await getWorkspaceUserIds(domain, actorUserId);
   }

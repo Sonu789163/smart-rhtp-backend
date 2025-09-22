@@ -11,7 +11,10 @@ const nodemailer_1 = __importDefault(require("nodemailer"));
 const crypto_1 = __importDefault(require("crypto"));
 const domainConfig_1 = require("../config/domainConfig");
 const events_1 = require("../lib/events");
+const emailService_1 = require("../services/emailService");
 // Helper to generate tokens
+// Creates an access token and a refresh token, stores the refresh
+// token in the user's document for later revocation, and returns both.
 const generateTokens = async (user) => {
     const accessToken = jsonwebtoken_1.default.sign({
         userId: user._id,
@@ -34,7 +37,7 @@ const generateTokens = async (user) => {
     return { accessToken, refreshToken };
 };
 exports.authController = {
-    // Register a new user
+    // Register a new user (with email OTP verification)
     async register(req, res) {
         const { email, password, name } = req.body;
         try {
@@ -64,6 +67,46 @@ exports.authController = {
                 name: name || email.split("@")[0], // Use email prefix as name if not provided
                 role: role, // Make sure role is set
             });
+            // Require email OTP verification before activating account
+            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            const expires = new Date(Date.now() + 10 * 60 * 1000);
+            user.registrationOTP = otp;
+            user.registrationOTPExpires = expires;
+            await user.save();
+            await (0, emailService_1.sendEmail)({
+                to: email,
+                subject: "Verify your email",
+                template: "registration-otp",
+                data: { otp, expiresMinutes: 10 },
+            });
+            res.status(201).json({ message: "OTP sent to your email to verify registration" });
+        }
+        catch (error) {
+            console.error("Registration error:", error);
+            res.status(500).json({ message: "Server error" });
+        }
+    },
+    // Verify registration OTP and issue tokens
+    async verifyRegistrationOtp(req, res) {
+        const { email, otp } = req.body;
+        try {
+            if (!email || !otp)
+                return res.status(400).json({ message: "Email and OTP are required" });
+            const user = await User_1.User.findOne({ email });
+            if (!user)
+                return res.status(404).json({ message: "User not found" });
+            if (!user.registrationOTP || !user.registrationOTPExpires) {
+                return res.status(400).json({ message: "No registration verification in progress" });
+            }
+            if (String(otp) !== String(user.registrationOTP)) {
+                return res.status(400).json({ message: "Invalid OTP" });
+            }
+            if (new Date() > new Date(user.registrationOTPExpires)) {
+                return res.status(400).json({ message: "OTP expired" });
+            }
+            // Clear registration OTP fields
+            user.registrationOTP = undefined;
+            user.registrationOTPExpires = undefined;
             await user.save();
             // Publish event for workspace notification
             await (0, events_1.publishEvent)({
@@ -73,10 +116,10 @@ exports.authController = {
                 resourceType: "user",
                 resourceId: user._id.toString(),
                 title: `New user registered: ${user.name || user.email}`,
-                notifyWorkspace: true,
+                notifyAdminsOnly: true,
             });
             const tokens = await generateTokens(user);
-            res.status(201).json({
+            res.status(200).json({
                 ...tokens,
                 user: {
                     userId: user._id,
@@ -87,7 +130,7 @@ exports.authController = {
             });
         }
         catch (error) {
-            console.error("Registration error:", error);
+            console.error("Verify registration OTP error:", error);
             res.status(500).json({ message: "Server error" });
         }
     },

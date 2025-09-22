@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 
+// Per-user notification document, scoped by userId + domain.
+// Created via publishEvent for a variety of actions.
 const notificationSchema = new mongoose.Schema(
   {
     id: { type: String, required: true, unique: true },

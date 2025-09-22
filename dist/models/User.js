@@ -5,6 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.User = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
+// Core user record with domain, role and optional password (email/password users).
+// Also stores OTP flows for profile updates, password changes and registration.
 const userSchema = new mongoose_1.default.Schema({
     microsoftId: { type: String, unique: true, sparse: true },
     name: { type: String },
@@ -71,5 +73,8 @@ const userSchema = new mongoose_1.default.Schema({
     passwordChangeOTP: { type: String },
     passwordChangeOTPExpires: { type: Date },
     passwordChangePendingHash: { type: String },
+    // Registration email verification OTP flow
+    registrationOTP: { type: String },
+    registrationOTPExpires: { type: Date },
 });
 exports.User = mongoose_1.default.model("User", userSchema);

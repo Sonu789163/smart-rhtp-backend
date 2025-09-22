@@ -7,6 +7,7 @@ interface AuthRequest extends Request {
 }
 
 export const notificationController = {
+  // List notifications for the authenticated user, scoped to the current workspace/domain.
   async list(req: AuthRequest, res: Response) {
     try {
       const { unread, page, pageSize } = (req.query || {}) as any;
@@ -24,6 +25,7 @@ export const notificationController = {
       res.status(500).json({ error: "Failed to list notifications" });
     }
   },
+  // Mark a single notification as read for the current user.
   async markRead(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
@@ -33,6 +35,7 @@ export const notificationController = {
       res.status(500).json({ error: "Failed to mark read" });
     }
   },
+  // Mark all notifications as read for the current user.
   async markAllRead(req: AuthRequest, res: Response) {
     try {
       await Notification.updateMany({ userId: req.user?._id?.toString?.() }, { $set: { isRead: true } });
@@ -41,6 +44,7 @@ export const notificationController = {
       res.status(500).json({ error: "Failed to mark all read" });
     }
   },
+  // Delete a notification for the current user.
   async delete(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;

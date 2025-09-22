@@ -5,6 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Notification = void 0;
 const mongoose_1 = __importDefault(require("mongoose"));
+// Per-user notification document, scoped by userId + domain.
+// Created via publishEvent for a variety of actions.
 const notificationSchema = new mongoose_1.default.Schema({
     id: { type: String, required: true, unique: true },
     userId: { type: String, required: true, index: true },

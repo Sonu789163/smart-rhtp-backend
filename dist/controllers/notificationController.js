@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.notificationController = void 0;
 const Notification_1 = require("../models/Notification");
 exports.notificationController = {
+    // List notifications for the authenticated user, scoped to the current workspace/domain.
     async list(req, res) {
         var _a, _b, _c;
         try {
@@ -23,6 +24,7 @@ exports.notificationController = {
             res.status(500).json({ error: "Failed to list notifications" });
         }
     },
+    // Mark a single notification as read for the current user.
     async markRead(req, res) {
         var _a, _b, _c;
         try {
@@ -34,6 +36,7 @@ exports.notificationController = {
             res.status(500).json({ error: "Failed to mark read" });
         }
     },
+    // Mark all notifications as read for the current user.
     async markAllRead(req, res) {
         var _a, _b, _c;
         try {
@@ -44,6 +47,7 @@ exports.notificationController = {
             res.status(500).json({ error: "Failed to mark all read" });
         }
     },
+    // Delete a notification for the current user.
     async delete(req, res) {
         var _a, _b, _c;
         try {

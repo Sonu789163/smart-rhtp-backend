@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.adminDomainAccess = exports.ensureDomainAccess = exports.domainAuthMiddleware = void 0;
 const User_1 = require("../models/User");
+// Resolves the effective workspace/domain for the request using `x-workspace`,
+// link access, or the user's saved `currentWorkspace`, and stores it on req.
 const domainAuthMiddleware = async (req, res, next) => {
     try {
         // Check for link access first

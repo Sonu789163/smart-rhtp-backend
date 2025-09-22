@@ -7,16 +7,20 @@ import { authController } from "../controllers/authController";
 import { Document } from "../models/Document";
 import { Chat } from "../models/Chat";
 import { Summary } from "../models/Summary";
+import { getPrimaryDomain } from "../config/domainConfig";
+import { publishEvent } from "../lib/events";
 
 const router = express.Router();
 
 // --- Email/Password Routes ---
 router.post("/register", authController.register);
+router.post("/register/verify-otp", authController.verifyRegistrationOtp);
 router.post("/login", authController.login);
 router.post("/refresh-token", authController.refreshToken);
 router.post("/logout", authController.logout);
 
 // Microsoft OAuth login
+// Returns the URL where the client should redirect the user to consent.
 router.get("/microsoft", (req, res) => {
   const authUrl =
     `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?` +
@@ -30,6 +34,8 @@ router.get("/microsoft", (req, res) => {
 });
 
 // Microsoft OAuth callback
+// Exchanges the authorization code for tokens, upserts a user, and redirects
+// back to the frontend with app JWTs in the query string.
 router.get("/callback", async (req, res) => {
   try {
     const { code } = req.query;
@@ -77,18 +83,36 @@ router.get("/callback", async (req, res) => {
     let user = await User.findOne({ microsoftId: userData.id });
 
     if (!user) {
+      const email = userData.userPrincipalName as string;
+      const domain = getPrimaryDomain(email);
       user = new User({
         microsoftId: userData.id,
         name: userData.displayName,
-        email: userData.userPrincipalName,
+        email,
+        domain,
         createdAt: new Date(),
         lastLogin: new Date(),
       });
       await user.save();
+      // Notify admins in this domain about new user
+      if (domain) {
+        await publishEvent({
+          actorUserId: user._id.toString(),
+          domain,
+          action: "user.registered",
+          resourceType: "user",
+          resourceId: user._id.toString(),
+          title: `New user registered: ${user.name || user.email}`,
+          notifyAdminsOnly: true,
+        });
+      }
     } else {
       user.lastLogin = new Date();
       user.name = userData.displayName;
       user.email = userData.userPrincipalName;
+      if (!user.domain && user.email) {
+        user.domain = getPrimaryDomain(user.email) || user.domain;
+      }
       await user.save();
     }
 
