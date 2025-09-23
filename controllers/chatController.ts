@@ -20,15 +20,13 @@ export const chatController = {
         workspaceId: currentWorkspace, // Filter by user's workspace
       };
 
-      // Admins can see all chats in their domain, regular users see only their own
-      if (req.user.role !== "admin") {
-        if (req.user.microsoftId) {
-          query.microsoftId = req.user.microsoftId;
-        } else if (req.user._id) {
-          query.userId = req.user._id.toString();
-        } else {
-          return res.status(400).json({ error: "No user identifier found" });
-        }
+      // Always scope to requesting user (separate chats by user)
+      if (req.user?.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user?._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
       }
 
       const chats = await Chat.find(query).sort({ updatedAt: -1 });
@@ -41,20 +39,20 @@ export const chatController = {
 
   async getByDocumentId(req: AuthRequest, res: Response) {
     try {
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
       const query: any = {
         documentId: req.params.documentId,
         domain: req.userDomain, // Filter by user's domain
+        workspaceId: currentWorkspace, // Ensure same workspace
       };
 
-      // Admins can see all chats in their domain, regular users see only their own
-      if (req.user.role !== "admin") {
-        if (req.user.microsoftId) {
-          query.microsoftId = req.user.microsoftId;
-        } else if (req.user._id) {
-          query.userId = req.user._id.toString();
-        } else {
-          return res.status(400).json({ error: "No user identifier found" });
-        }
+      // Always scope to requesting user
+      if (req.user?.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user?._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
       }
 
       const chats = await Chat.find(query).sort({ updatedAt: -1 });
@@ -109,20 +107,20 @@ export const chatController = {
 
   async addMessage(req: AuthRequest, res: Response) {
     try {
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
       const query: any = {
         id: req.params.chatId,
         domain: req.userDomain, // Ensure user can only access chats from their domain
+        workspaceId: currentWorkspace,
       };
 
-      // Admins can access all chats in their domain, regular users see only their own
-      if (req.user.role !== "admin") {
-        if (req.user.microsoftId) {
-          query.microsoftId = req.user.microsoftId;
-        } else if (req.user._id) {
-          query.userId = req.user._id.toString();
-        } else {
-          return res.status(400).json({ error: "No user identifier found" });
-        }
+      // Always scope to requesting user
+      if (req.user?.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user?._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
       }
 
       const chat = await Chat.findOne(query);
@@ -145,20 +143,20 @@ export const chatController = {
 
   async update(req: AuthRequest, res: Response) {
     try {
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
       const query: any = {
         id: req.params.id,
         domain: req.userDomain, // Ensure user can only update chats from their domain
+        workspaceId: currentWorkspace,
       };
 
-      // Admins can update all chats in their domain, regular users see only their own
-      if (req.user.role !== "admin") {
-        if (req.user.microsoftId) {
-          query.microsoftId = req.user.microsoftId;
-        } else if (req.user._id) {
-          query.userId = req.user._id.toString();
-        } else {
-          return res.status(400).json({ error: "No user identifier found" });
-        }
+      // Always scope to requesting user
+      if (req.user?.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user?._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
       }
 
       const chat = await Chat.findOneAndUpdate(
@@ -184,20 +182,20 @@ export const chatController = {
 
   async delete(req: AuthRequest, res: Response) {
     try {
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
       const query: any = {
         id: req.params.id,
         domain: req.userDomain, // Ensure user can only delete chats from their domain
+        workspaceId: currentWorkspace,
       };
 
-      // Admins can delete all chats in their domain, regular users see only their own
-      if (req.user.role !== "admin") {
-        if (req.user.microsoftId) {
-          query.microsoftId = req.user.microsoftId;
-        } else if (req.user._id) {
-          query.userId = req.user._id.toString();
-        } else {
-          return res.status(400).json({ error: "No user identifier found" });
-        }
+      // Always scope to requesting user
+      if (req.user?.microsoftId) {
+        query.microsoftId = req.user.microsoftId;
+      } else if (req.user?._id) {
+        query.userId = req.user._id.toString();
+      } else {
+        return res.status(400).json({ error: "No user identifier found" });
       }
 
       const chat = await Chat.findOneAndDelete(query);
