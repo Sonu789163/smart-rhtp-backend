@@ -61,13 +61,8 @@ export const summaryController = {
       };
 
       const link = (req as any).linkAccess;
-      if (!link && req.user && req.user.role !== "admin") {
-        if (req.user.microsoftId) {
-          query.microsoftId = req.user.microsoftId;
-        } else if (req.user._id) {
-          query.userId = req.user._id.toString();
-        }
-      }
+      // All workspace members can see all summaries in their workspace
+      // No user-based filtering needed - workspace isolation is sufficient
 
       const summaries = await Summary.find(query).sort({
         updatedAt: -1,
@@ -102,14 +97,14 @@ export const summaryController = {
         updatedAt: new Date(),
       };
 
-      // Add user information if available
-      if (req.user) {
-        if (req.user.microsoftId) {
-          summaryData.microsoftId = req.user.microsoftId;
-        } else if (req.user._id) {
-          summaryData.userId = req.user._id.toString();
-        }
-      }
+      // // Add user information if available
+      // if (req.user) {
+      //   if (req.user.microsoftId) {
+      //     summaryData.microsoftId = req.user.microsoftId;
+      //   } else if (req.user._id) {
+      //     summaryData.userId = req.user._id.toString();
+      //   }
+      // }
 
       const summary = new Summary(summaryData);
       await summary.save();
@@ -213,16 +208,8 @@ export const summaryController = {
         domain: req.userDomain, // Ensure user can only update summaries from their domain
       };
 
-      // Admins can update all summaries in their domain, regular users see only their own
-      if (req.user.role !== "admin") {
-        if (req.user.microsoftId) {
-          query.microsoftId = req.user.microsoftId;
-        } else if (req.user._id) {
-          query.userId = req.user._id.toString();
-        } else {
-          return res.status(400).json({ error: "No user identifier found" });
-        }
-      }
+      // All workspace members can update summaries in their workspace
+      // No user-based filtering needed - workspace isolation is sufficient
 
       const summary = await Summary.findOneAndUpdate(query, req.body, {
         new: true,
@@ -250,16 +237,8 @@ export const summaryController = {
         domain: req.userDomain, // Ensure user can only delete summaries from their domain
       };
 
-      // Admins can delete all summaries in their domain, regular users see only their own
-      if (req.user.role !== "admin") {
-        if (req.user.microsoftId) {
-          query.microsoftId = req.user.microsoftId;
-        } else if (req.user._id) {
-          query.userId = req.user._id.toString();
-        } else {
-          return res.status(400).json({ error: "No user identifier found" });
-        }
-      }
+      // All workspace members can delete summaries in their workspace
+      // No user-based filtering needed - workspace isolation is sufficient
 
       const summary = await Summary.findOneAndDelete(query).lean();
       if (summary) {
@@ -345,6 +324,38 @@ export const summaryController = {
     } catch (error) {
       console.error("Error generating PDF with PDF.co:", error);
       res.status(500).json({ error: "Failed to generate PDF" });
+    }
+  },
+
+  // Admin: Get all summaries across all workspaces in domain
+  async getAllAdmin(req: AuthRequest, res: Response) {
+    try {
+      const user = req.user;
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const query: any = {
+        domain: req.user?.domain || req.userDomain, // Use user's actual domain for admin
+      };
+
+      const summaries = await Summary.find(query).sort({ updatedAt: -1 });
+      
+      // Get all workspaces to map workspaceId to workspace name
+      const { Workspace } = await import("../models/Workspace");
+      const workspaces = await Workspace.find({ domain: req.user?.domain || req.userDomain });
+      const workspaceMap = new Map(workspaces.map(ws => [ws.workspaceId, { workspaceId: ws.workspaceId, name: ws.name, slug: ws.slug }]));
+
+      // Add workspace information to each summary
+      const summariesWithWorkspace = summaries.map(summary => ({
+        ...summary.toObject(),
+        workspaceId: workspaceMap.get(summary.workspaceId) || { workspaceId: summary.workspaceId, name: workspaceMap.get(summary.workspaceId)?.name ? workspaceMap.get(summary.workspaceId)?.name : 'Excollo', slug: 'unknown' }
+      }));
+
+      res.json(summariesWithWorkspace);
+    } catch (error) {
+      console.error("Error fetching admin summaries:", error);
+      res.status(500).json({ error: "Failed to fetch summaries" });
     }
   },
 };

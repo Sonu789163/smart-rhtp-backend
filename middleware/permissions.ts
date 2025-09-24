@@ -57,8 +57,11 @@ async function getUserRoleForDocument(req: any, documentId: string): Promise<Rol
   const domain = req.userDomain;
   const doc = await Document.findOne({ id: documentId, domain });
   if (!doc) return "none";
-  if (doc.userId && req.user?._id && doc.userId === req.user._id.toString()) {
-    return "owner";
+
+  // All workspace members get editor access to documents in their workspace
+  const currentWorkspace = req.currentWorkspace || domain;
+  if (doc.workspaceId === currentWorkspace) {
+    return "editor";
   }
 
   // Link access

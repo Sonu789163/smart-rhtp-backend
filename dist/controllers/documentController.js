@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -11,6 +44,9 @@ const index_1 = require("../index");
 const r2_1 = require("../config/r2");
 const events_1 = require("../lib/events");
 const client_s3_1 = require("@aws-sdk/client-s3");
+const Summary_1 = require("../models/Summary");
+const Report_1 = require("../models/Report");
+const Chat_1 = require("../models/Chat");
 exports.documentController = {
     // Helper to normalize namespace consistently (trim, preserve .pdf extension)
     // Keep case as-is; rely on Mongo collation for case-insensitive uniqueness
@@ -234,7 +270,7 @@ exports.documentController = {
     },
     // restore disabled while trash functionality is off
     async delete(req, res) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+        var _a, _b, _c;
         try {
             // Get current workspace from request
             const currentWorkspace = req.currentWorkspace || req.userDomain;
@@ -260,11 +296,13 @@ exports.documentController = {
                     console.error("Failed to delete file from R2:", err);
                 }
             }
-            if (document.type === "DRHP") {
-                // If deleting a DRHP, also delete its related RHP
-                if (document.relatedRhpId) {
-                    const rhpDoc = await Document_1.Document.findOne({ id: document.relatedRhpId });
-                    if (rhpDoc && rhpDoc.fileKey) {
+            // Build list of document ids to cascade delete against (this doc + paired doc if any)
+            const docIdsToDelete = [document.id];
+            // If deleting a DRHP, also delete its related RHP document and its file
+            if (document.type === "DRHP" && document.relatedRhpId) {
+                const rhpDoc = await Document_1.Document.findOne({ id: document.relatedRhpId, domain: req.userDomain, workspaceId: currentWorkspace });
+                if (rhpDoc) {
+                    if (rhpDoc.fileKey) {
                         try {
                             const deleteRhpCommand = new client_s3_1.DeleteObjectCommand({
                                 Bucket: r2_1.R2_BUCKET,
@@ -275,53 +313,38 @@ exports.documentController = {
                         catch (err) {
                             console.error("Failed to delete RHP file from R2:", err);
                         }
-                        await Document_1.Document.deleteOne({ id: document.relatedRhpId });
                     }
+                    docIdsToDelete.push(rhpDoc.id);
                 }
-                await Document_1.Document.deleteOne({ id: document.id });
-                // Publish delete event
-                await (0, events_1.publishEvent)({
-                    actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
-                    domain: req.userDomain,
-                    action: "document.deleted",
-                    resourceType: "document",
-                    resourceId: document.id,
-                    title: `Document deleted: ${document.name}`,
-                    notifyWorkspace: true,
-                });
-                res.json({ message: "DRHP and related RHP deleted successfully" });
             }
-            else if (document.type === "RHP") {
-                const drhpDoc = await Document_1.Document.findOne({ relatedRhpId: document.id });
+            // If deleting an RHP, unlink from DRHP (and include for report deletion scope)
+            if (document.type === "RHP") {
+                const drhpDoc = await Document_1.Document.findOne({ relatedRhpId: document.id, domain: req.userDomain, workspaceId: currentWorkspace });
                 if (drhpDoc) {
                     drhpDoc.relatedRhpId = undefined;
                     await drhpDoc.save();
+                    // not deleting DRHP here; only unlink
                 }
-                await Document_1.Document.deleteOne({ id: document.id });
-                await (0, events_1.publishEvent)({
-                    actorUserId: (_f = (_e = (_d = req.user) === null || _d === void 0 ? void 0 : _d._id) === null || _e === void 0 ? void 0 : _e.toString) === null || _f === void 0 ? void 0 : _f.call(_e),
-                    domain: req.userDomain,
-                    action: "document.deleted",
-                    resourceType: "document",
-                    resourceId: document.id,
-                    title: `Document deleted: ${document.name}`,
-                    notifyWorkspace: true,
-                });
-                res.json({ message: "RHP deleted successfully" });
             }
-            else {
-                await Document_1.Document.deleteOne({ id: document.id });
-                await (0, events_1.publishEvent)({
-                    actorUserId: (_j = (_h = (_g = req.user) === null || _g === void 0 ? void 0 : _g._id) === null || _h === void 0 ? void 0 : _h.toString) === null || _j === void 0 ? void 0 : _j.call(_h),
-                    domain: req.userDomain,
-                    action: "document.deleted",
-                    resourceType: "document",
-                    resourceId: document.id,
-                    title: `Document deleted: ${document.name}`,
-                    notifyWorkspace: true,
-                });
-                res.json({ message: "Document deleted successfully" });
-            }
+            // Delete summaries for all affected documents
+            await Summary_1.Summary.deleteMany({ domain: req.userDomain, workspaceId: currentWorkspace, documentId: { $in: docIdsToDelete } });
+            // Delete chats for all affected documents
+            await Chat_1.Chat.deleteMany({ domain: req.userDomain, workspaceId: currentWorkspace, documentId: { $in: docIdsToDelete } });
+            // Delete reports that reference any of the affected documents as DRHP or RHP
+            await Report_1.Report.deleteMany({ domain: req.userDomain, workspaceId: currentWorkspace, $or: [{ drhpId: { $in: docIdsToDelete } }, { rhpId: { $in: docIdsToDelete } }] });
+            // Finally, delete the documents themselves
+            await Document_1.Document.deleteMany({ id: { $in: docIdsToDelete }, domain: req.userDomain, workspaceId: currentWorkspace });
+            // Publish delete event for the primary document
+            await (0, events_1.publishEvent)({
+                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                domain: req.userDomain,
+                action: "document.deleted",
+                resourceType: "document",
+                resourceId: document.id,
+                title: `Document deleted: ${document.name}`,
+                notifyWorkspace: true,
+            });
+            res.json({ message: "Document and related artifacts deleted successfully" });
         }
         catch (error) {
             console.error("Error deleting document:", error);
@@ -576,6 +599,43 @@ exports.documentController = {
         catch (error) {
             console.error("Error uploading RHP:", error);
             res.status(500).json({ error: "Failed to upload RHP" });
+        }
+    },
+    // Admin: Get all documents across all workspaces in domain
+    async getAllAdmin(req, res) {
+        var _a, _b;
+        try {
+            const user = req.user;
+            console.log("Admin getAllAdmin - User:", user === null || user === void 0 ? void 0 : user.role, "Domain:", req.userDomain);
+            if (!user || user.role !== "admin") {
+                console.log("Admin access denied for user:", user === null || user === void 0 ? void 0 : user.role);
+                return res.status(403).json({ error: "Admin access required" });
+            }
+            const query = {
+                domain: ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain) || req.userDomain, // Use user's actual domain for admin
+            };
+            console.log("Admin query:", query);
+            const documents = await Document_1.Document.find(query).sort({ uploadedAt: -1 });
+            console.log("Found documents:", documents.length);
+            // Get all workspaces to map workspaceId to workspace name
+            const { Workspace } = await Promise.resolve().then(() => __importStar(require("../models/Workspace")));
+            const workspaces = await Workspace.find({ domain: ((_b = req.user) === null || _b === void 0 ? void 0 : _b.domain) || req.userDomain });
+            console.log("Found workspaces:", workspaces.length);
+            const workspaceMap = new Map(workspaces.map(ws => [ws.workspaceId, { workspaceId: ws.workspaceId, name: ws.name, slug: ws.slug }]));
+            // Add workspace information to each document
+            const documentsWithWorkspace = documents.map(doc => {
+                var _a, _b;
+                return ({
+                    ...doc.toObject(),
+                    workspaceId: workspaceMap.get(doc.workspaceId) || { workspaceId: doc.workspaceId, name: ((_a = workspaceMap.get(doc.workspaceId)) === null || _a === void 0 ? void 0 : _a.name) ? (_b = workspaceMap.get(doc.workspaceId)) === null || _b === void 0 ? void 0 : _b.name : 'Excollo', slug: 'unknown' }
+                });
+            });
+            console.log("Returning documents with workspace info:", documentsWithWorkspace.length);
+            res.json(documentsWithWorkspace);
+        }
+        catch (error) {
+            console.error("Error fetching admin documents:", error);
+            res.status(500).json({ error: "Failed to fetch documents" });
         }
     },
 };

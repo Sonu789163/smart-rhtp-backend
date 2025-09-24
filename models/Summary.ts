@@ -8,8 +8,8 @@ const summarySchema = new mongoose.Schema({
   documentId: { type: String, required: true },
   domain: { type: String, required: true, index: true }, // Domain isolation (company level)
   workspaceId: { type: String, required: true, index: true }, // Workspace isolation (team level)
-  microsoftId: { type: String },
-  userId: { type: String },
+  microsoftId: { type: String }, // Optional: for tracking who created it
+  userId: { type: String }, // Optional: for tracking who created it
 });
 
 export const Summary = mongoose.model("Summary", summarySchema);

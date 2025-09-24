@@ -44,6 +44,9 @@ const upload = multer({
 // Get all documents for current user (supports directoryId and includeDeleted)
 router.get("/", documentController.getAll);
 
+// Admin: Get all documents across all workspaces
+router.get("/admin", documentController.getAllAdmin);
+
 // Check if document exists by namespace
 router.get("/check-existing", documentController.checkExistingByNamespace);
 

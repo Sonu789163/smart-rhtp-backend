@@ -19,6 +19,8 @@ router.use(auth_1.authMiddleware);
 router.use(domainAuth_1.domainAuthMiddleware);
 // Get all reports for the user
 router.get("/", reportController_1.reportController.getAll);
+// Admin: Get all reports across all workspaces
+router.get("/admin", reportController_1.reportController.getAllAdmin);
 // Get single report
 router.get("/:id", (0, permissions_1.requireReportPermission)("id", "viewer"), reportController_1.reportController.getById);
 // Create new report (rate limited)

@@ -54,7 +54,7 @@ async function getUserRoleForDirectory(req, directoryId) {
     return "none";
 }
 async function getUserRoleForDocument(req, documentId) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d;
     // Admins are owners
     if (((_a = req.user) === null || _a === void 0 ? void 0 : _a.role) === "admin")
         return "owner";
@@ -62,8 +62,10 @@ async function getUserRoleForDocument(req, documentId) {
     const doc = await Document_1.Document.findOne({ id: documentId, domain });
     if (!doc)
         return "none";
-    if (doc.userId && ((_b = req.user) === null || _b === void 0 ? void 0 : _b._id) && doc.userId === req.user._id.toString()) {
-        return "owner";
+    // All workspace members get editor access to documents in their workspace
+    const currentWorkspace = req.currentWorkspace || domain;
+    if (doc.workspaceId === currentWorkspace) {
+        return "editor";
     }
     // Link access
     const link = req.linkAccess;
@@ -82,7 +84,7 @@ async function getUserRoleForDocument(req, documentId) {
         }
     }
     // Direct share for user
-    const userId = (_e = (_d = (_c = req.user) === null || _c === void 0 ? void 0 : _c._id) === null || _d === void 0 ? void 0 : _d.toString) === null || _e === void 0 ? void 0 : _e.call(_d);
+    const userId = (_d = (_c = (_b = req.user) === null || _b === void 0 ? void 0 : _b._id) === null || _c === void 0 ? void 0 : _c.toString) === null || _d === void 0 ? void 0 : _d.call(_c);
     if (userId) {
         const share = await SharePermission_1.SharePermission.findOne({ domain, resourceType: "document", resourceId: documentId, scope: "user", principalId: userId });
         if (share)

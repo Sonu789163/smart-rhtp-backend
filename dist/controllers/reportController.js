@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -94,15 +127,6 @@ exports.reportController = {
                 workspaceId: currentWorkspace, // Add workspace for team isolation
                 updatedAt: new Date(),
             };
-            // Add user information if available
-            if (req.user) {
-                if (req.user.microsoftId) {
-                    reportData.microsoftId = req.user.microsoftId;
-                }
-                else if (req.user._id) {
-                    reportData.userId = req.user._id.toString();
-                }
-            }
             const report = new Report_1.Report(reportData);
             await report.save();
             // Publish event for workspace notification
@@ -179,18 +203,8 @@ exports.reportController = {
                 id,
                 domain: req.userDomain, // Ensure user can only update reports from their domain
             };
-            // Admins can update all reports in their domain, regular users see only their own
-            if (req.user.role !== "admin") {
-                if (req.user.microsoftId) {
-                    query.microsoftId = req.user.microsoftId;
-                }
-                else if (req.user._id) {
-                    query.userId = req.user._id.toString();
-                }
-                else {
-                    return res.status(400).json({ error: "No user identifier found" });
-                }
-            }
+            // All workspace members can update reports in their workspace
+            // No user-based filtering needed - workspace isolation is sufficient
             const report = await Report_1.Report.findOneAndUpdate(query, req.body, {
                 new: true,
             });
@@ -275,6 +289,37 @@ exports.reportController = {
         catch (error) {
             console.error("Error generating PDF with PDF.co:", error);
             res.status(500).json({ error: "Failed to generate PDF" });
+        }
+    },
+    // Admin: Get all reports across all workspaces in domain
+    async getAllAdmin(req, res) {
+        var _a, _b;
+        try {
+            const user = req.user;
+            if (!user || user.role !== "admin") {
+                return res.status(403).json({ error: "Admin access required" });
+            }
+            const query = {
+                domain: ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain) || req.userDomain, // Use user's actual domain for admin
+            };
+            const reports = await Report_1.Report.find(query).sort({ updatedAt: -1 });
+            // Get all workspaces to map workspaceId to workspace name
+            const { Workspace } = await Promise.resolve().then(() => __importStar(require("../models/Workspace")));
+            const workspaces = await Workspace.find({ domain: ((_b = req.user) === null || _b === void 0 ? void 0 : _b.domain) || req.userDomain });
+            const workspaceMap = new Map(workspaces.map(ws => [ws.workspaceId, { workspaceId: ws.workspaceId, name: ws.name, slug: ws.slug }]));
+            // Add workspace information to each report
+            const reportsWithWorkspace = reports.map(report => {
+                var _a, _b;
+                return ({
+                    ...report.toObject(),
+                    workspaceId: workspaceMap.get(report.workspaceId) || { workspaceId: report.workspaceId, name: ((_a = workspaceMap.get(report.workspaceId)) === null || _a === void 0 ? void 0 : _a.name) ? (_b = workspaceMap.get(report.workspaceId)) === null || _b === void 0 ? void 0 : _b.name : 'Excollo', slug: 'unknown' }
+                });
+            });
+            res.json(reportsWithWorkspace);
+        }
+        catch (error) {
+            console.error("Error fetching admin reports:", error);
+            res.status(500).json({ error: "Failed to fetch reports" });
         }
     },
 };

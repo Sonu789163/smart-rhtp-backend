@@ -52,6 +52,8 @@ router.use(auth_1.authMiddleware);
 router.use(domainAuth_1.domainAuthMiddleware);
 // Get all summaries for the user
 router.get("/", summaryController_1.summaryController.getAll);
+// Admin: Get all summaries across all workspaces
+router.get("/admin", summaryController_1.summaryController.getAllAdmin);
 // Admin metrics: total summaries count
 router.get("/admin/metrics/count", async (req, res) => {
     var _a;
