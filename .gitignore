@@ -7,6 +7,10 @@ removeUserFields.js
 scripts/migrateToDomainSeparation.js
 scripts/migrateToDomainSeparation.ts
 scripts/seedAdmin.js
+scripts/removeUserIdFromData.ts
+scripts/migrateAddWorkspaceId.ts
+scripts/migrateToDomainSeparation.ts
+scripts/migrateToDomainSeparation.ts
 
 # Environment files
 .env
