@@ -139,50 +139,14 @@ export const summaryController = {
         return res.status(404).json({ error: "Summary not found" });
       }
 
-      // Prepare full HTML (wrap if only fragment provided)
-      const rawHtml = String(summary.content || "");
-      const html = /<html[\s\S]*?>[\s\S]*<\/html>/i.test(rawHtml)
-        ? rawHtml
-        : `<!DOCTYPE html><html><head><meta charset="UTF-8" /></head><body>${rawHtml}</body></html>`;
+      // Write HTML to a temp file
+      const tmpDir = os.tmpdir();
+      const htmlPath = path.join(tmpDir, `summary_${id}.html`);
+      const docxPath = path.join(tmpDir, `summary_${id}.docx`);
+      await writeFile(htmlPath, summary.content, "utf8");
 
-      const safeTitle = (summary.title || "summary").replace(
-        /[^a-z0-9\-_. ]/gi,
-        "_"
-      );
-
-      let docxBuffer: Buffer | null = null;
-      // Try html-to-docx first (robust in Node)
-      try {
-        const mod: any = await import("html-to-docx");
-        const HTMLtoDOCX = mod.default || mod;
-        docxBuffer = (await HTMLtoDOCX(html, undefined, {
-          title: safeTitle,
-          description: "Generated from HTML",
-        })) as Buffer;
-      } catch (e) {
-        // Fallback to html-docx-js
-        try {
-          const blobOrBuffer: any = htmlDocx.asBlob(html);
-          if (Buffer.isBuffer(blobOrBuffer)) {
-            docxBuffer = blobOrBuffer as Buffer;
-          } else if (
-            blobOrBuffer &&
-            "arrayBuffer" in blobOrBuffer &&
-            typeof blobOrBuffer.arrayBuffer === "function"
-          ) {
-            const ab = await (blobOrBuffer as Blob).arrayBuffer();
-            docxBuffer = Buffer.from(ab);
-          } else {
-            docxBuffer = Buffer.from(String(blobOrBuffer) || "");
-          }
-        } catch (fallbackErr) {
-          console.error(
-            "Both html-to-docx and html-docx-js failed:",
-            fallbackErr
-          );
-          throw fallbackErr;
-        }
-      }
+      // Convert HTML to DOCX using Pandoc
+      await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
 
       // Send DOCX file
       res.setHeader(
@@ -191,11 +155,15 @@ export const summaryController = {
       );
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${safeTitle}.docx"`
+        `attachment; filename="${summary.title || "summary"}.docx"`
       );
-      res.end(docxBuffer);
+      res.sendFile(docxPath, async (err) => {
+        // Clean up temp files
+        await unlink(htmlPath);
+        await unlink(docxPath);
+      });
     } catch (error) {
-      console.error("Error generating DOCX:", error);
+      console.error("Error generating DOCX with Pandoc:", error);
       res.status(500).json({ error: "Failed to generate DOCX" });
     }
   },
@@ -340,16 +308,29 @@ export const summaryController = {
       };
 
       const summaries = await Summary.find(query).sort({ updatedAt: -1 });
-      
+
       // Get all workspaces to map workspaceId to workspace name
       const { Workspace } = await import("../models/Workspace");
-      const workspaces = await Workspace.find({ domain: req.user?.domain || req.userDomain });
-      const workspaceMap = new Map(workspaces.map(ws => [ws.workspaceId, { workspaceId: ws.workspaceId, name: ws.name, slug: ws.slug }]));
+      const workspaces = await Workspace.find({
+        domain: req.user?.domain || req.userDomain,
+      });
+      const workspaceMap = new Map(
+        workspaces.map((ws) => [
+          ws.workspaceId,
+          { workspaceId: ws.workspaceId, name: ws.name, slug: ws.slug },
+        ])
+      );
 
       // Add workspace information to each summary
-      const summariesWithWorkspace = summaries.map(summary => ({
+      const summariesWithWorkspace = summaries.map((summary) => ({
         ...summary.toObject(),
-        workspaceId: workspaceMap.get(summary.workspaceId) || { workspaceId: summary.workspaceId, name: workspaceMap.get(summary.workspaceId)?.name ? workspaceMap.get(summary.workspaceId)?.name : 'Excollo', slug: 'unknown' }
+        workspaceId: workspaceMap.get(summary.workspaceId) || {
+          workspaceId: summary.workspaceId,
+          name: workspaceMap.get(summary.workspaceId)?.name
+            ? workspaceMap.get(summary.workspaceId)?.name
+            : "Excollo",
+          slug: "unknown",
+        },
       }));
 
       res.json(summariesWithWorkspace);

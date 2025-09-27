@@ -49,7 +49,7 @@ router.post(
 router.put("/:id", requireSummaryPermission("id", "editor"), summaryController.update);
 
 // Delete summary
-router.delete("/:id", requireSummaryPermission("id", "owner"), summaryController.delete);
+router.delete("/:id", summaryController.delete);
 
 // Download DOCX for a summary
 router.get("/:id/download-docx", summaryController.downloadDocx);

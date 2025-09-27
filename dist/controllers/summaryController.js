@@ -39,9 +39,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.summaryController = void 0;
 const Summary_1 = require("../models/Summary");
 const axios_1 = __importDefault(require("axios"));
+const promises_1 = require("fs/promises");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
-const html_docx_js_1 = __importDefault(require("html-docx-js"));
+const path_1 = __importDefault(require("path"));
+const os_1 = __importDefault(require("os"));
 const index_1 = require("../index");
 const events_1 = require("../lib/events");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
@@ -154,51 +156,24 @@ exports.summaryController = {
             if (!summary || !summary.content) {
                 return res.status(404).json({ error: "Summary not found" });
             }
-            // Prepare full HTML (wrap if only fragment provided)
-            const rawHtml = String(summary.content || "");
-            const html = /<html[\s\S]*?>[\s\S]*<\/html>/i.test(rawHtml)
-                ? rawHtml
-                : `<!DOCTYPE html><html><head><meta charset="UTF-8" /></head><body>${rawHtml}</body></html>`;
-            const safeTitle = (summary.title || "summary").replace(/[^a-z0-9\-_. ]/gi, "_");
-            let docxBuffer = null;
-            // Try html-to-docx first (robust in Node)
-            try {
-                const mod = await Promise.resolve().then(() => __importStar(require("html-to-docx")));
-                const HTMLtoDOCX = mod.default || mod;
-                docxBuffer = (await HTMLtoDOCX(html, undefined, {
-                    title: safeTitle,
-                    description: "Generated from HTML",
-                }));
-            }
-            catch (e) {
-                // Fallback to html-docx-js
-                try {
-                    const blobOrBuffer = html_docx_js_1.default.asBlob(html);
-                    if (Buffer.isBuffer(blobOrBuffer)) {
-                        docxBuffer = blobOrBuffer;
-                    }
-                    else if (blobOrBuffer &&
-                        "arrayBuffer" in blobOrBuffer &&
-                        typeof blobOrBuffer.arrayBuffer === "function") {
-                        const ab = await blobOrBuffer.arrayBuffer();
-                        docxBuffer = Buffer.from(ab);
-                    }
-                    else {
-                        docxBuffer = Buffer.from(String(blobOrBuffer) || "");
-                    }
-                }
-                catch (fallbackErr) {
-                    console.error("Both html-to-docx and html-docx-js failed:", fallbackErr);
-                    throw fallbackErr;
-                }
-            }
+            // Write HTML to a temp file
+            const tmpDir = os_1.default.tmpdir();
+            const htmlPath = path_1.default.join(tmpDir, `summary_${id}.html`);
+            const docxPath = path_1.default.join(tmpDir, `summary_${id}.docx`);
+            await (0, promises_1.writeFile)(htmlPath, summary.content, "utf8");
+            // Convert HTML to DOCX using Pandoc
+            await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
             // Send DOCX file
             res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-            res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.docx"`);
-            res.end(docxBuffer);
+            res.setHeader("Content-Disposition", `attachment; filename="${summary.title || "summary"}.docx"`);
+            res.sendFile(docxPath, async (err) => {
+                // Clean up temp files
+                await (0, promises_1.unlink)(htmlPath);
+                await (0, promises_1.unlink)(docxPath);
+            });
         }
         catch (error) {
-            console.error("Error generating DOCX:", error);
+            console.error("Error generating DOCX with Pandoc:", error);
             res.status(500).json({ error: "Failed to generate DOCX" });
         }
     },
@@ -327,14 +302,25 @@ exports.summaryController = {
             const summaries = await Summary_1.Summary.find(query).sort({ updatedAt: -1 });
             // Get all workspaces to map workspaceId to workspace name
             const { Workspace } = await Promise.resolve().then(() => __importStar(require("../models/Workspace")));
-            const workspaces = await Workspace.find({ domain: ((_b = req.user) === null || _b === void 0 ? void 0 : _b.domain) || req.userDomain });
-            const workspaceMap = new Map(workspaces.map(ws => [ws.workspaceId, { workspaceId: ws.workspaceId, name: ws.name, slug: ws.slug }]));
+            const workspaces = await Workspace.find({
+                domain: ((_b = req.user) === null || _b === void 0 ? void 0 : _b.domain) || req.userDomain,
+            });
+            const workspaceMap = new Map(workspaces.map((ws) => [
+                ws.workspaceId,
+                { workspaceId: ws.workspaceId, name: ws.name, slug: ws.slug },
+            ]));
             // Add workspace information to each summary
-            const summariesWithWorkspace = summaries.map(summary => {
+            const summariesWithWorkspace = summaries.map((summary) => {
                 var _a, _b;
                 return ({
                     ...summary.toObject(),
-                    workspaceId: workspaceMap.get(summary.workspaceId) || { workspaceId: summary.workspaceId, name: ((_a = workspaceMap.get(summary.workspaceId)) === null || _a === void 0 ? void 0 : _a.name) ? (_b = workspaceMap.get(summary.workspaceId)) === null || _b === void 0 ? void 0 : _b.name : 'Excollo', slug: 'unknown' }
+                    workspaceId: workspaceMap.get(summary.workspaceId) || {
+                        workspaceId: summary.workspaceId,
+                        name: ((_a = workspaceMap.get(summary.workspaceId)) === null || _a === void 0 ? void 0 : _a.name)
+                            ? (_b = workspaceMap.get(summary.workspaceId)) === null || _b === void 0 ? void 0 : _b.name
+                            : "Excollo",
+                        slug: "unknown",
+                    },
                 });
             });
             res.json(summariesWithWorkspace);

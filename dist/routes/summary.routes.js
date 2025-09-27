@@ -75,7 +75,7 @@ router.post("/create", (0, rateLimitByWorkspace_1.rateLimitByWorkspace)("summary
 // Update summary
 router.put("/:id", (0, permissions_1.requireSummaryPermission)("id", "editor"), summaryController_1.summaryController.update);
 // Delete summary
-router.delete("/:id", (0, permissions_1.requireSummaryPermission)("id", "owner"), summaryController_1.summaryController.delete);
+router.delete("/:id", summaryController_1.summaryController.delete);
 // Download DOCX for a summary
 router.get("/:id/download-docx", summaryController_1.summaryController.downloadDocx);
 // Download PDF generated from HTML content for a summary
