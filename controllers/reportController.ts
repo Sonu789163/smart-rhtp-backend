@@ -3,18 +3,12 @@ import { Report } from "../models/Report";
 import axios from "axios";
 import { io } from "../index";
 import { publishEvent } from "../lib/events";
-import { r2Client, R2_BUCKET } from "../config/r2";
-import {
-  GetObjectCommand,
-  DeleteObjectCommand,
-  PutObjectCommand,
-} from "@aws-sdk/client-s3";
+
 import { writeFile, unlink } from "fs/promises";
 import { exec } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import os from "os";
-import puppeteer from "puppeteer";
 
 const execAsync = promisify(exec);
 
