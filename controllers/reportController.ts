@@ -35,15 +35,8 @@ export const reportController = {
         workspaceId: currentWorkspace, // Filter by user's workspace
       };
 
-      const link = (req as any).linkAccess;
-      // Admins or link access can see all reports in domain
-      if (!link && req.user && req.user.role !== "admin") {
-        if (req.user.microsoftId) {
-          query.microsoftId = req.user.microsoftId;
-        } else if (req.user._id) {
-          query.userId = req.user._id.toString();
-        }
-      }
+      // Visibility: All members of the workspace can see all reports in that workspace.
+      // Do not further restrict by userId/microsoftId for reads.
 
       const reports = await Report.find(query).sort({ updatedAt: -1 });
       res.json(reports);
@@ -99,6 +92,14 @@ export const reportController = {
 
       // Get current workspace from request
       const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      // Ensure one report per DRHP/RHP pair in the workspace: replace previous if exists
+      await Report.deleteMany({
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+        drhpNamespace,
+        rhpNamespace,
+      });
 
       const reportData: any = {
         id: Date.now().toString(),
