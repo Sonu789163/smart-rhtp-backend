@@ -1,0 +1,30 @@
+# Render deployment configuration for PDF generation
+services:
+  - type: web
+    name: smart-rhtp-backend
+    env: node
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: true
+      - key: PUPPETEER_EXECUTABLE_PATH
+        value: /usr/bin/chromium-browser
+    # Add system dependencies for Puppeteer
+    systemPackages:
+      - chromium-browser
+      - fonts-liberation
+      - libasound2
+      - libatk-bridge2.0-0
+      - libdrm2
+      - libxcomposite1
+      - libxdamage1
+      - libxrandr2
+      - libgbm1
+      - libxss1
+      - libnss3
+    # Health check
+    healthCheckPath: /health

@@ -263,25 +263,8 @@ export const reportController = {
         return res.status(404).json({ error: "Report not found" });
       }
 
-      // Launch Puppeteer browser
-      browser = await puppeteer.launch({
-        headless: true,
-        args: [
-          '--no-sandbox', 
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--disable-gpu'
-        ]
-      });
-      
-      const page = await browser.newPage();
-      
-      // Set viewport for consistent rendering
-      await page.setViewport({ width: 1200, height: 800 });
-      
+      console.log('Starting PDF generation for report:', id);
+
       // Wrap content in proper HTML structure if needed
       let htmlContent = report.content;
       if (!htmlContent.includes('<!DOCTYPE html>')) {
@@ -310,6 +293,50 @@ export const reportController = {
           </html>
         `;
       }
+
+      // Cloud-optimized Puppeteer configuration
+      const launchOptions: any = {
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor',
+          '--single-process',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-extensions',
+          '--disable-plugins',
+          '--disable-images',
+          '--disable-javascript',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--disable-translate',
+          '--hide-scrollbars',
+          '--mute-audio',
+          '--no-default-browser-check',
+          '--disable-background-networking'
+        ]
+      };
+
+      // Add executable path if provided (for cloud environments)
+      if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+        launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+      }
+
+      console.log('Launching Puppeteer with cloud-optimized options');
+      browser = await puppeteer.launch(launchOptions);
+      
+      const page = await browser.newPage();
+      
+      // Set viewport for consistent rendering
+      await page.setViewport({ width: 1200, height: 800 });
       
       // Set content and wait for any dynamic content to load
       await page.setContent(htmlContent, { 
@@ -366,13 +393,36 @@ export const reportController = {
       // Send PDF buffer to client
       res.end(pdfBuffer);
       
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error generating PDF with Puppeteer:", error);
-      res.status(500).json({ error: "Failed to generate PDF" });
+      console.error("Error details:", {
+        message: error?.message,
+        stack: error?.stack,
+        name: error?.name
+      });
+      
+      // Provide more specific error messages
+      let errorMessage = "Failed to generate PDF";
+      if (error?.message?.includes('Could not find browser')) {
+        errorMessage = "Browser not found. Please check Puppeteer installation.";
+      } else if (error?.message?.includes('Failed to launch')) {
+        errorMessage = "Failed to launch browser. This might be due to missing dependencies.";
+      } else if (error?.message?.includes('timeout')) {
+        errorMessage = "PDF generation timed out. Please try again.";
+      }
+      
+      res.status(500).json({ 
+        error: errorMessage,
+        details: process.env.NODE_ENV === 'development' ? error?.message : undefined
+      });
     } finally {
       // Always close the browser
       if (browser) {
-        await browser.close();
+        try {
+          await browser.close();
+        } catch (closeError) {
+          console.error("Error closing browser:", closeError);
+        }
       }
     }
   },

@@ -258,6 +258,7 @@ exports.reportController = {
         }
     },
     async downloadPdfFromHtml(req, res) {
+        var _a, _b, _c;
         let browser;
         try {
             const { id } = req.params;
@@ -265,8 +266,9 @@ exports.reportController = {
             if (!report || !report.content) {
                 return res.status(404).json({ error: "Report not found" });
             }
-            // Launch Puppeteer browser
-            browser = await puppeteer_1.default.launch({
+            console.log('Starting PDF generation for report:', id);
+            // Launch Puppeteer browser with cloud-friendly configuration
+            const launchOptions = {
                 headless: true,
                 args: [
                     '--no-sandbox',
@@ -275,9 +277,32 @@ exports.reportController = {
                     '--disable-accelerated-2d-canvas',
                     '--no-first-run',
                     '--no-zygote',
-                    '--disable-gpu'
+                    '--disable-gpu',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor',
+                    '--single-process',
+                    '--disable-background-timer-throttling',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-renderer-backgrounding',
+                    '--disable-extensions',
+                    '--disable-plugins',
+                    '--disable-images',
+                    '--disable-javascript',
+                    '--disable-default-apps',
+                    '--disable-sync',
+                    '--disable-translate',
+                    '--hide-scrollbars',
+                    '--mute-audio',
+                    '--no-default-browser-check',
+                    '--disable-background-networking'
                 ]
-            });
+            };
+            // Add executable path if provided
+            if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+                launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+            }
+            console.log('Launching Puppeteer with options:', JSON.stringify(launchOptions, null, 2));
+            browser = await puppeteer_1.default.launch(launchOptions);
             const page = await browser.newPage();
             // Set viewport for consistent rendering
             await page.setViewport({ width: 1200, height: 800 });
@@ -355,12 +380,36 @@ exports.reportController = {
         }
         catch (error) {
             console.error("Error generating PDF with Puppeteer:", error);
-            res.status(500).json({ error: "Failed to generate PDF" });
+            console.error("Error details:", {
+                message: error === null || error === void 0 ? void 0 : error.message,
+                stack: error === null || error === void 0 ? void 0 : error.stack,
+                name: error === null || error === void 0 ? void 0 : error.name
+            });
+            // Provide more specific error messages
+            let errorMessage = "Failed to generate PDF";
+            if ((_a = error === null || error === void 0 ? void 0 : error.message) === null || _a === void 0 ? void 0 : _a.includes('Could not find browser')) {
+                errorMessage = "Browser not found. Please check Puppeteer installation.";
+            }
+            else if ((_b = error === null || error === void 0 ? void 0 : error.message) === null || _b === void 0 ? void 0 : _b.includes('Failed to launch')) {
+                errorMessage = "Failed to launch browser. This might be due to missing dependencies.";
+            }
+            else if ((_c = error === null || error === void 0 ? void 0 : error.message) === null || _c === void 0 ? void 0 : _c.includes('timeout')) {
+                errorMessage = "PDF generation timed out. Please try again.";
+            }
+            res.status(500).json({
+                error: errorMessage,
+                details: process.env.NODE_ENV === 'development' ? error === null || error === void 0 ? void 0 : error.message : undefined
+            });
         }
         finally {
             // Always close the browser
             if (browser) {
-                await browser.close();
+                try {
+                    await browser.close();
+                }
+                catch (closeError) {
+                    console.error("Error closing browser:", closeError);
+                }
             }
         }
     },
