@@ -38,12 +38,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.summaryController = void 0;
 const Summary_1 = require("../models/Summary");
+const axios_1 = __importDefault(require("axios"));
 const promises_1 = require("fs/promises");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
-const puppeteer_1 = __importDefault(require("puppeteer"));
 const index_1 = require("../index");
 const events_1 = require("../lib/events");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
@@ -256,178 +256,36 @@ exports.summaryController = {
         }
     },
     async downloadHtmlPdf(req, res) {
-        var _a, _b, _c;
-        let browser;
         try {
             const { id } = req.params;
             const summary = await Summary_1.Summary.findOne({ id });
             if (!summary || !summary.content) {
                 return res.status(404).json({ error: "Summary not found" });
             }
-            console.log('Starting PDF generation for summary:', id);
-            // Wrap content in proper HTML structure if needed
-            let htmlContent = summary.content;
-            if (!htmlContent.includes('<!DOCTYPE html>')) {
-                htmlContent = `
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <meta charset="UTF-8">
-              <style>
-                body { 
-                  font-family: Arial, sans-serif; 
-                  margin: 0; 
-                  padding: 20px; 
-                  line-height: 1.6;
-                  color: #333;
-                }
-                h1, h2, h3, h4, h5, h6 { color: #4B2A06; }
-                table { border-collapse: collapse; width: 100%; }
-                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                th { background-color: #f2f2f2; }
-              </style>
-            </head>
-            <body>
-              ${htmlContent}
-            </body>
-          </html>
-        `;
-            }
-            // Cloud-optimized Puppeteer configuration
-            const launchOptions = {
-                headless: true,
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-accelerated-2d-canvas',
-                    '--no-first-run',
-                    '--no-zygote',
-                    '--disable-gpu',
-                    '--disable-web-security',
-                    '--disable-features=VizDisplayCompositor',
-                    '--single-process',
-                    '--disable-background-timer-throttling',
-                    '--disable-backgrounding-occluded-windows',
-                    '--disable-renderer-backgrounding',
-                    '--disable-extensions',
-                    '--disable-plugins',
-                    '--disable-images',
-                    '--disable-javascript',
-                    '--disable-default-apps',
-                    '--disable-sync',
-                    '--disable-translate',
-                    '--hide-scrollbars',
-                    '--mute-audio',
-                    '--no-default-browser-check',
-                    '--disable-background-networking'
-                ]
-            };
-            // Try different executable paths for different environments
-            const possiblePaths = [
-                process.env.PUPPETEER_EXECUTABLE_PATH,
-                '/usr/bin/chromium-browser',
-                '/usr/bin/chromium',
-                '/usr/bin/google-chrome',
-                '/usr/bin/google-chrome-stable',
-                '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS
-                'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // Windows
-                'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe' // Windows 32-bit
-            ];
-            // Find the first available executable path
-            for (const path of possiblePaths) {
-                if (path && require('fs').existsSync(path)) {
-                    launchOptions.executablePath = path;
-                    console.log(`Using Chromium at: ${path}`);
-                    break;
-                }
-            }
-            // If no custom path found, let Puppeteer use its bundled Chromium
-            if (!launchOptions.executablePath) {
-                console.log('Using Puppeteer bundled Chromium');
-            }
-            console.log('Launching Puppeteer with cloud-optimized options');
-            browser = await puppeteer_1.default.launch(launchOptions);
-            const page = await browser.newPage();
-            // Set viewport for consistent rendering
-            await page.setViewport({ width: 1200, height: 800 });
-            // Set content and wait for any dynamic content to load
-            await page.setContent(htmlContent, {
-                waitUntil: 'networkidle0',
-                timeout: 30000
-            });
-            // Generate PDF with enhanced options
-            const pdfBuffer = await page.pdf({
-                format: 'A4',
-                printBackground: true,
-                preferCSSPageSize: false,
-                margin: {
-                    top: '20px',
-                    right: '20px',
-                    bottom: '20px',
-                    left: '20px'
+            // Call PDF.co API to generate PDF from HTML
+            const pdfcoResponse = await axios_1.default.post("https://api.pdf.co/v1/pdf/convert/from/html", {
+                html: summary.content,
+                name: `${summary.title || "summary"}.pdf`,
+            }, {
+                headers: {
+                    "x-api-key": process.env.PDFCO_API_KEY,
+                    "Content-Type": "application/json",
                 },
-                displayHeaderFooter: false,
-                timeout: 30000
             });
-            // Validate PDF buffer
-            if (!pdfBuffer || pdfBuffer.length === 0) {
-                throw new Error('PDF buffer is empty');
+            if (!pdfcoResponse.data || !pdfcoResponse.data.url) {
+                throw new Error("PDF.co did not return a PDF URL");
             }
-            // Check PDF header
-            const headerBytes = pdfBuffer.slice(0, 4);
-            const headerString = String.fromCharCode(...headerBytes);
-            if (!headerString.startsWith('%PDF')) {
-                throw new Error('Invalid PDF header generated');
-            }
-            console.log(`PDF generated successfully: ${pdfBuffer.length} bytes`);
-            // Set response headers
+            // Download the generated PDF and stream to client
+            const pdfStream = await axios_1.default.get(pdfcoResponse.data.url, {
+                responseType: "stream",
+            });
             res.setHeader("Content-Type", "application/pdf");
-            res.setHeader("Content-Transfer-Encoding", "binary");
-            // Clean filename - remove .pdf extension if it exists, then add it back
-            let cleanTitle = (summary.title || "summary");
-            if (cleanTitle.toLowerCase().endsWith('.pdf')) {
-                cleanTitle = cleanTitle.slice(0, -4);
-            }
-            const sanitizedTitle = cleanTitle.replace(/[^a-zA-Z0-9\s-_]/g, '');
-            res.setHeader("Content-Disposition", `attachment; filename="${sanitizedTitle}.pdf"`);
-            res.setHeader("Content-Length", pdfBuffer.length);
-            // Send PDF buffer to client
-            res.end(pdfBuffer);
+            res.setHeader("Content-Disposition", `attachment; filename=\"${summary.title || "summary"}.pdf\"`);
+            pdfStream.data.pipe(res);
         }
         catch (error) {
-            console.error("Error generating PDF with Puppeteer:", error);
-            console.error("Error details:", {
-                message: error === null || error === void 0 ? void 0 : error.message,
-                stack: error === null || error === void 0 ? void 0 : error.stack,
-                name: error === null || error === void 0 ? void 0 : error.name
-            });
-            // Provide more specific error messages
-            let errorMessage = "Failed to generate PDF";
-            if ((_a = error === null || error === void 0 ? void 0 : error.message) === null || _a === void 0 ? void 0 : _a.includes('Could not find browser')) {
-                errorMessage = "Browser not found. Please check Puppeteer installation.";
-            }
-            else if ((_b = error === null || error === void 0 ? void 0 : error.message) === null || _b === void 0 ? void 0 : _b.includes('Failed to launch')) {
-                errorMessage = "Failed to launch browser. This might be due to missing dependencies.";
-            }
-            else if ((_c = error === null || error === void 0 ? void 0 : error.message) === null || _c === void 0 ? void 0 : _c.includes('timeout')) {
-                errorMessage = "PDF generation timed out. Please try again.";
-            }
-            res.status(500).json({
-                error: errorMessage,
-                details: process.env.NODE_ENV === 'development' ? error === null || error === void 0 ? void 0 : error.message : undefined
-            });
-        }
-        finally {
-            // Always close the browser
-            if (browser) {
-                try {
-                    await browser.close();
-                }
-                catch (closeError) {
-                    console.error("Error closing browser:", closeError);
-                }
-            }
+            console.error("Error generating PDF with PDF.co:", error);
+            res.status(500).json({ error: "Failed to generate PDF" });
         }
     },
     // Admin: Get all summaries across all workspaces in domain
