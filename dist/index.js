@@ -89,13 +89,7 @@ app.use("/api/notifications", notification_routes_1.default);
 app.use("/api/workspaces", workspace_routes_1.default);
 // Health check endpoint
 app.get("/health", (req, res) => {
-    res.status(200).json({
-        status: "OK",
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
-        version: process.env.npm_package_version || "1.0.0"
-    });
+    res.status(200).json({ status: "ok" });
 });
 server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);

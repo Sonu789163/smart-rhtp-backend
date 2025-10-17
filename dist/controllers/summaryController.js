@@ -265,7 +265,35 @@ exports.summaryController = {
                 return res.status(404).json({ error: "Summary not found" });
             }
             console.log('Starting PDF generation for summary:', id);
-            // Launch Puppeteer browser with cloud-friendly configuration
+            // Wrap content in proper HTML structure if needed
+            let htmlContent = summary.content;
+            if (!htmlContent.includes('<!DOCTYPE html>')) {
+                htmlContent = `
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <meta charset="UTF-8">
+              <style>
+                body { 
+                  font-family: Arial, sans-serif; 
+                  margin: 0; 
+                  padding: 20px; 
+                  line-height: 1.6;
+                  color: #333;
+                }
+                h1, h2, h3, h4, h5, h6 { color: #4B2A06; }
+                table { border-collapse: collapse; width: 100%; }
+                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                th { background-color: #f2f2f2; }
+              </style>
+            </head>
+            <body>
+              ${htmlContent}
+            </body>
+          </html>
+        `;
+            }
+            // Cloud-optimized Puppeteer configuration
             const launchOptions = {
                 headless: true,
                 args: [
@@ -295,43 +323,15 @@ exports.summaryController = {
                     '--disable-background-networking'
                 ]
             };
-            // Add executable path if provided
+            // Add executable path if provided (for cloud environments)
             if (process.env.PUPPETEER_EXECUTABLE_PATH) {
                 launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
             }
-            console.log('Launching Puppeteer with options:', JSON.stringify(launchOptions, null, 2));
+            console.log('Launching Puppeteer with cloud-optimized options');
             browser = await puppeteer_1.default.launch(launchOptions);
             const page = await browser.newPage();
             // Set viewport for consistent rendering
             await page.setViewport({ width: 1200, height: 800 });
-            // Wrap content in proper HTML structure if needed
-            let htmlContent = summary.content;
-            if (!htmlContent.includes('<!DOCTYPE html>')) {
-                htmlContent = `
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <meta charset="UTF-8">
-              <style>
-                body { 
-                  font-family: Arial, sans-serif; 
-                  margin: 0; 
-                  padding: 20px; 
-                  line-height: 1.6;
-                  color: #333;
-                }
-                h1, h2, h3, h4, h5, h6 { color: #4B2A06; }
-                table { border-collapse: collapse; width: 100%; }
-                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                th { background-color: #f2f2f2; }
-              </style>
-            </head>
-            <body>
-              ${htmlContent}
-            </body>
-          </html>
-        `;
-            }
             // Set content and wait for any dynamic content to load
             await page.setContent(htmlContent, {
                 waitUntil: 'networkidle0',
