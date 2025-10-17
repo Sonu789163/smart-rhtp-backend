@@ -38,12 +38,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.summaryController = void 0;
 const Summary_1 = require("../models/Summary");
-const axios_1 = __importDefault(require("axios"));
 const promises_1 = require("fs/promises");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
+const puppeteer_1 = __importDefault(require("puppeteer"));
 const index_1 = require("../index");
 const events_1 = require("../lib/events");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
@@ -256,36 +256,110 @@ exports.summaryController = {
         }
     },
     async downloadHtmlPdf(req, res) {
+        let browser;
         try {
             const { id } = req.params;
             const summary = await Summary_1.Summary.findOne({ id });
             if (!summary || !summary.content) {
                 return res.status(404).json({ error: "Summary not found" });
             }
-            // Call PDF.co API to generate PDF from HTML
-            const pdfcoResponse = await axios_1.default.post("https://api.pdf.co/v1/pdf/convert/from/html", {
-                html: summary.content,
-                name: `${summary.title || "summary"}.pdf`,
-            }, {
-                headers: {
-                    "x-api-key": process.env.PDFCO_API_KEY,
-                    "Content-Type": "application/json",
-                },
+            // Launch Puppeteer browser
+            browser = await puppeteer_1.default.launch({
+                headless: true,
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--disable-gpu'
+                ]
             });
-            if (!pdfcoResponse.data || !pdfcoResponse.data.url) {
-                throw new Error("PDF.co did not return a PDF URL");
+            const page = await browser.newPage();
+            // Set viewport for consistent rendering
+            await page.setViewport({ width: 1200, height: 800 });
+            // Wrap content in proper HTML structure if needed
+            let htmlContent = summary.content;
+            if (!htmlContent.includes('<!DOCTYPE html>')) {
+                htmlContent = `
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <meta charset="UTF-8">
+              <style>
+                body { 
+                  font-family: Arial, sans-serif; 
+                  margin: 0; 
+                  padding: 20px; 
+                  line-height: 1.6;
+                  color: #333;
+                }
+                h1, h2, h3, h4, h5, h6 { color: #4B2A06; }
+                table { border-collapse: collapse; width: 100%; }
+                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                th { background-color: #f2f2f2; }
+              </style>
+            </head>
+            <body>
+              ${htmlContent}
+            </body>
+          </html>
+        `;
             }
-            // Download the generated PDF and stream to client
-            const pdfStream = await axios_1.default.get(pdfcoResponse.data.url, {
-                responseType: "stream",
+            // Set content and wait for any dynamic content to load
+            await page.setContent(htmlContent, {
+                waitUntil: 'networkidle0',
+                timeout: 30000
             });
+            // Generate PDF with enhanced options
+            const pdfBuffer = await page.pdf({
+                format: 'A4',
+                printBackground: true,
+                preferCSSPageSize: false,
+                margin: {
+                    top: '20px',
+                    right: '20px',
+                    bottom: '20px',
+                    left: '20px'
+                },
+                displayHeaderFooter: false,
+                timeout: 30000
+            });
+            // Validate PDF buffer
+            if (!pdfBuffer || pdfBuffer.length === 0) {
+                throw new Error('PDF buffer is empty');
+            }
+            // Check PDF header
+            const headerBytes = pdfBuffer.slice(0, 4);
+            const headerString = String.fromCharCode(...headerBytes);
+            if (!headerString.startsWith('%PDF')) {
+                throw new Error('Invalid PDF header generated');
+            }
+            console.log(`PDF generated successfully: ${pdfBuffer.length} bytes`);
+            // Set response headers
             res.setHeader("Content-Type", "application/pdf");
-            res.setHeader("Content-Disposition", `attachment; filename=\"${summary.title || "summary"}.pdf\"`);
-            pdfStream.data.pipe(res);
+            res.setHeader("Content-Transfer-Encoding", "binary");
+            // Clean filename - remove .pdf extension if it exists, then add it back
+            let cleanTitle = (summary.title || "summary");
+            if (cleanTitle.toLowerCase().endsWith('.pdf')) {
+                cleanTitle = cleanTitle.slice(0, -4);
+            }
+            const sanitizedTitle = cleanTitle.replace(/[^a-zA-Z0-9\s-_]/g, '');
+            res.setHeader("Content-Disposition", `attachment; filename="${sanitizedTitle}.pdf"`);
+            res.setHeader("Content-Length", pdfBuffer.length);
+            // Send PDF buffer to client
+            res.end(pdfBuffer);
         }
         catch (error) {
-            console.error("Error generating PDF with PDF.co:", error);
+            console.error("Error generating PDF with Puppeteer:", error);
             res.status(500).json({ error: "Failed to generate PDF" });
+        }
+        finally {
+            // Always close the browser
+            if (browser) {
+                await browser.close();
+            }
         }
     },
     // Admin: Get all summaries across all workspaces in domain

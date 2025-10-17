@@ -3,6 +3,7 @@ import { Report } from "../models/Report";
 import axios from "axios";
 import { io } from "../index";
 import { publishEvent } from "../lib/events";
+import puppeteer from "puppeteer";
 
 import { writeFile, unlink } from "fs/promises";
 import { exec } from "child_process";
@@ -254,6 +255,7 @@ export const reportController = {
   },
 
   async downloadPdfFromHtml(req: AuthRequest, res: Response) {
+    let browser;
     try {
       const { id } = req.params;
       const report = await Report.findOne({ id });
@@ -261,39 +263,117 @@ export const reportController = {
         return res.status(404).json({ error: "Report not found" });
       }
 
-      // Call PDF.co API to generate PDF from HTML
-      const pdfcoResponse = await axios.post(
-        "https://api.pdf.co/v1/pdf/convert/from/html",
-        {
-          html: report.content,
-          name: `${report.title || "report"}.pdf`,
-        },
-        {
-          headers: {
-            "x-api-key": process.env.PDFCO_API_KEY,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      if (!pdfcoResponse.data || !pdfcoResponse.data.url) {
-        throw new Error("PDF.co did not return a PDF URL");
+      // Launch Puppeteer browser
+      browser = await puppeteer.launch({
+        headless: true,
+        args: [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu'
+        ]
+      });
+      
+      const page = await browser.newPage();
+      
+      // Set viewport for consistent rendering
+      await page.setViewport({ width: 1200, height: 800 });
+      
+      // Wrap content in proper HTML structure if needed
+      let htmlContent = report.content;
+      if (!htmlContent.includes('<!DOCTYPE html>')) {
+        htmlContent = `
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <meta charset="UTF-8">
+              <style>
+                body { 
+                  font-family: Arial, sans-serif; 
+                  margin: 0; 
+                  padding: 20px; 
+                  line-height: 1.6;
+                  color: #333;
+                }
+                h1, h2, h3, h4, h5, h6 { color: #4B2A06; }
+                table { border-collapse: collapse; width: 100%; }
+                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                th { background-color: #f2f2f2; }
+              </style>
+            </head>
+            <body>
+              ${htmlContent}
+            </body>
+          </html>
+        `;
       }
-
-      // Download the generated PDF and stream to client
-      const pdfStream = await axios.get(pdfcoResponse.data.url, {
-        responseType: "stream",
+      
+      // Set content and wait for any dynamic content to load
+      await page.setContent(htmlContent, { 
+        waitUntil: 'networkidle0',
+        timeout: 30000 
+      });
+      
+      // Generate PDF with enhanced options
+      const pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        preferCSSPageSize: false,
+        margin: {
+          top: '20px',
+          right: '20px',
+          bottom: '20px',
+          left: '20px'
+        },
+        displayHeaderFooter: false,
+        timeout: 30000
       });
 
+      // Validate PDF buffer
+      if (!pdfBuffer || pdfBuffer.length === 0) {
+        throw new Error('PDF buffer is empty');
+      }
+
+      // Check PDF header
+      const headerBytes = pdfBuffer.slice(0, 4);
+      const headerString = String.fromCharCode(...headerBytes);
+      if (!headerString.startsWith('%PDF')) {
+        throw new Error('Invalid PDF header generated');
+      }
+
+      console.log(`PDF generated successfully: ${pdfBuffer.length} bytes`);
+
+      // Set response headers
       res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Transfer-Encoding", "binary");
+      
+      // Clean filename - remove .pdf extension if it exists, then add it back
+      let cleanTitle = (report.title || "report");
+      if (cleanTitle.toLowerCase().endsWith('.pdf')) {
+        cleanTitle = cleanTitle.slice(0, -4);
+      }
+      const sanitizedTitle = cleanTitle.replace(/[^a-zA-Z0-9\s-_]/g, '');
+      
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename=\"${report.title || "report"}.pdf\"`
+        `attachment; filename="${sanitizedTitle}.pdf"`
       );
-      pdfStream.data.pipe(res);
+      res.setHeader("Content-Length", pdfBuffer.length);
+      
+      // Send PDF buffer to client
+      res.end(pdfBuffer);
+      
     } catch (error) {
-      console.error("Error generating PDF with PDF.co:", error);
+      console.error("Error generating PDF with Puppeteer:", error);
       res.status(500).json({ error: "Failed to generate PDF" });
+    } finally {
+      // Always close the browser
+      if (browser) {
+        await browser.close();
+      }
     }
   },
 
