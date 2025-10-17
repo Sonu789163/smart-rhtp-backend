@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node dist/index.js",
     "dev": "nodemon index.ts",
-    "build": "tsc",
+    "build": "npm install && tsc",
     "test": "jest",
     "postinstall": "puppeteer install",
     "migrate:domain": "node scripts/migrateToDomainSeparation.js",
@@ -44,6 +44,7 @@
     "multer-gridfs-storage": "^5.0.2",
     "multer-s3": "^3.0.1",
     "nodemailer": "^6.10.1",
+    "@types/nodemailer": "^6.4.20",
     "nodemon": "^3.1.10",
     "pandoc": "^0.2.0",
     "passport": "^0.7.0",
@@ -58,7 +59,6 @@
   "devDependencies": {
     "@types/form-data": "^2.2.1",
     "@types/multer": "^1.4.13",
-    "@types/multer-s3": "^3.0.3",
-    "@types/nodemailer": "^6.4.20"
+    "@types/multer-s3": "^3.0.3"
   }
 }
