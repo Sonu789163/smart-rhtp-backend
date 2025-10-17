@@ -323,9 +323,30 @@ export const summaryController = {
         ]
       };
 
-      // Add executable path if provided (for cloud environments)
-      if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-        launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+      // Try different executable paths for different environments
+      const possiblePaths = [
+        process.env.PUPPETEER_EXECUTABLE_PATH,
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // macOS
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', // Windows
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe' // Windows 32-bit
+      ];
+
+      // Find the first available executable path
+      for (const path of possiblePaths) {
+        if (path && require('fs').existsSync(path)) {
+          launchOptions.executablePath = path;
+          console.log(`Using Chromium at: ${path}`);
+          break;
+        }
+      }
+
+      // If no custom path found, let Puppeteer use its bundled Chromium
+      if (!launchOptions.executablePath) {
+        console.log('Using Puppeteer bundled Chromium');
       }
 
       console.log('Launching Puppeteer with cloud-optimized options');

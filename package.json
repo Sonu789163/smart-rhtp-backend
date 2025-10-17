@@ -8,7 +8,7 @@
     "dev": "nodemon index.ts",
     "build": "npm install && tsc",
     "test": "jest",
-    "postinstall": "puppeteer install",
+    "postinstall": "puppeteer install --with-deps",
     "migrate:domain": "node scripts/migrateToDomainSeparation.js",
     "migrate:domain:ts": "ts-node scripts/migrateToDomainSeparation.ts",
     "migrate:workspace": "ts-node scripts/migrateAddWorkspaceId.ts"
