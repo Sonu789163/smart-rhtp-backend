@@ -38,7 +38,7 @@ const upload = multer({
     },
     acl: "private", // or 'public-read' if you want public access
   }),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
+  limits: { fileSize: 100 * 1024 * 1024 }, // 50MB limit
 });
 
 // Get all documents for current user (supports directoryId and includeDeleted)
@@ -66,7 +66,7 @@ router.post(
     if (err && err.code === "LIMIT_FILE_SIZE") {
       return res
         .status(413)
-        .json({ error: "File too large. Maximum size is 25MB." });
+        .json({ error: "File too large. Maximum size is 100MB." });
     }
     next(err);
   },
@@ -78,6 +78,15 @@ router.post(
   "/upload-rhp",
   rateLimitByWorkspace("document:upload", 100, 24 * 60 * 60 * 1000),
   upload.single("file"), // @ts-ignore
+  // @ts-ignore
+  function (err: any, req: Request, res: Response, next: NextFunction) {
+    if (err && err.code === "LIMIT_FILE_SIZE") {
+      return res
+        .status(413)
+        .json({ error: "File too large. Maximum size is 100MB." });
+    }
+    next(err);
+  },
   documentController.uploadRhp
 );
 
