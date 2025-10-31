@@ -3,21 +3,20 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendEmail = void 0;
-const nodemailer_1 = __importDefault(require("nodemailer"));
-// Create transporter (configure with your email service)
-const createTransporter = () => {
-    return nodemailer_1.default.createTransport({
-        host: process.env.SMTP_HOST || "smtp.gmail.com",
-        port: parseInt(process.env.SMTP_PORT || "587"),
-        secure: false, // true for 465, false for other ports
-        auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS,
-        },
-    });
+exports.testSmtpConnection = exports.sendEmail = void 0;
+const axios_1 = __importDefault(require("axios"));
+// Brevo config helper
+const getBrevoConfig = () => {
+    const apiKey = process.env.BREVO_API_KEY;
+    const fromEmail = process.env.BREVO_FROM_EMAIL;
+    const fromName = process.env.APP_NAME || "RHP Document";
+    if (!apiKey)
+        throw new Error("BREVO_API_KEY environment variable is not set");
+    if (!fromEmail)
+        throw new Error("BREVO_FROM_EMAIL is not set");
+    return { apiKey, fromEmail, fromName };
 };
-// Email templates
+// Email templates (same as before)
 const emailTemplates = {
     "workspace-invitation": (data) => ({
         html: `
@@ -228,26 +227,75 @@ const emailTemplates = {
     }),
 };
 const sendEmail = async (emailData) => {
+    var _a;
     try {
-        const transporter = createTransporter();
+        const { apiKey, fromEmail, fromName } = getBrevoConfig();
+        console.log("📧 Using Brevo API to send email");
+        console.log("   From:", `${fromName} <${fromEmail}>`);
+        console.log("   To:", emailData.to);
+        console.log("   Template:", emailData.template);
+        // Check if template exists
         if (!emailTemplates[emailData.template]) {
             throw new Error(`Email template '${emailData.template}' not found`);
         }
+        // Get template content
         const template = emailTemplates[emailData.template](emailData.data);
-        const mailOptions = {
-            from: `"${process.env.APP_NAME || "RHP Document"}" <${process.env.SMTP_USER}>`,
-            to: emailData.to,
+        const resp = await axios_1.default.post("https://api.brevo.com/v3/smtp/email", {
+            sender: { email: fromEmail, name: fromName },
+            to: [{ email: emailData.to }],
             subject: emailData.subject,
-            text: template.text,
-            html: template.html,
-        };
-        await transporter.sendMail(mailOptions);
-        console.log(`Email sent successfully to ${emailData.to}`);
+            htmlContent: template.html,
+            textContent: template.text,
+        }, { headers: { "api-key": apiKey, "content-type": "application/json" }, timeout: 15000 });
+        console.log("✅ Email sent successfully via Brevo!");
+        console.log("   Message ID:", ((_a = resp.data) === null || _a === void 0 ? void 0 : _a.messageId) || "n/a");
+        console.log("   Recipient:", emailData.to);
+        // If admin email is configured and this is a registration OTP, also send copy to admin
+        if (process.env.ADMIN_EMAIL && emailData.template === "registration-otp") {
+            try {
+                await axios_1.default.post("https://api.brevo.com/v3/smtp/email", {
+                    sender: { email: fromEmail, name: fromName },
+                    to: [{ email: process.env.ADMIN_EMAIL }],
+                    subject: `[Admin Copy] ${emailData.subject} - User: ${emailData.to}`,
+                    htmlContent: template.html,
+                    textContent: template.text,
+                }, { headers: { "api-key": apiKey, "content-type": "application/json" }, timeout: 15000 });
+                console.log(`✓ Admin copy sent to ${process.env.ADMIN_EMAIL}`);
+            }
+            catch (adminError) {
+                console.error("Failed to send admin copy (non-critical):", adminError);
+            }
+        }
     }
     catch (error) {
-        console.error("Error sending email:", error);
+        console.error("❌ Error sending email:", error);
+        console.error("Error details:", {
+            message: error === null || error === void 0 ? void 0 : error.message,
+            stack: error === null || error === void 0 ? void 0 : error.stack,
+        });
         throw error;
     }
 };
 exports.sendEmail = sendEmail;
+// Test Brevo configuration on startup
+const testSmtpConnection = async () => {
+    try {
+        console.log("🔍 Testing Brevo configuration on startup...");
+        const apiKey = process.env.BREVO_API_KEY;
+        const fromEmail = process.env.BREVO_FROM_EMAIL;
+        if (!apiKey || !fromEmail) {
+            console.warn("⚠️ Brevo not fully configured. Set BREVO_API_KEY and BREVO_FROM_EMAIL");
+            return false;
+        }
+        console.log("✅ Brevo config present - Email service is ready");
+        console.log("   From:", fromEmail);
+        return true;
+    }
+    catch (error) {
+        console.warn("⚠️ Brevo configuration test failed on startup:");
+        console.warn("Error:", error.message);
+        return false;
+    }
+};
+exports.testSmtpConnection = testSmtpConnection;
 exports.default = exports.sendEmail;

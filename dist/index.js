@@ -26,8 +26,11 @@ const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
 const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+const emailService_1 = require("./services/emailService");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
+// Trust proxy for Render deployment
+app.set('trust proxy', 1);
 const server = http_1.default.createServer(app);
 const io = new socket_io_1.Server(server, {
     cors: {
@@ -67,8 +70,12 @@ if (!MONGODB_URI) {
 }
 mongoose_1.default
     .connect(MONGODB_URI)
-    .then(() => {
+    .then(async () => {
     console.log("Connected to MongoDB");
+    // Test SMTP connection on startup (non-blocking)
+    (0, emailService_1.testSmtpConnection)().catch((err) => {
+        console.error("SMTP test error:", err);
+    });
 })
     .catch((error) => {
     console.error("MongoDB connection error:", error);
@@ -90,6 +97,19 @@ app.use("/api/workspaces", workspace_routes_1.default);
 // Health check endpoint
 app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });
+});
+// Global error handlers to prevent server crashes
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    // Don't exit the process, just log the error
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    // Don't exit the process, just log the error
+});
+// Handle EPIPE errors specifically
+process.on('SIGPIPE', () => {
+    console.log('SIGPIPE received, ignoring...');
 });
 server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
