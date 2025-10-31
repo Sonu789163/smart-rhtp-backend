@@ -3,6 +3,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.directoryController = void 0;
 const Directory_1 = require("../models/Directory");
 const Document_1 = require("../models/Document");
+const Summary_1 = require("../models/Summary");
+const Chat_1 = require("../models/Chat");
+const Report_1 = require("../models/Report");
 const events_1 = require("../lib/events");
 exports.directoryController = {
     async move(req, res) {
@@ -220,6 +223,37 @@ exports.directoryController = {
                     if (!visited.has(child.id))
                         queue.push(child.id);
                 }
+            }
+            // Get all documents in all directories to be deleted
+            const documentsToDelete = await Document_1.Document.find({
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+                directoryId: { $in: dirsToDelete },
+            });
+            const documentIds = documentsToDelete.map(doc => doc.id);
+            // Delete all related data for these documents
+            if (documentIds.length > 0) {
+                // Delete summaries for all affected documents
+                await Summary_1.Summary.deleteMany({
+                    domain: req.userDomain,
+                    workspaceId: currentWorkspace,
+                    documentId: { $in: documentIds }
+                });
+                // Delete chats for all affected documents
+                await Chat_1.Chat.deleteMany({
+                    domain: req.userDomain,
+                    workspaceId: currentWorkspace,
+                    documentId: { $in: documentIds }
+                });
+                // Delete reports that reference any of the affected documents as DRHP or RHP
+                await Report_1.Report.deleteMany({
+                    domain: req.userDomain,
+                    workspaceId: currentWorkspace,
+                    $or: [
+                        { drhpId: { $in: documentIds } },
+                        { rhpId: { $in: documentIds } }
+                    ]
+                });
             }
             // Delete all documents in all directories
             await Document_1.Document.deleteMany({

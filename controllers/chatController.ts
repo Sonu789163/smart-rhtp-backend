@@ -233,10 +233,19 @@ export const chatController = {
     }
   },
 
-  // Admin: Get all chats (no user filtering)
-  async getAllAdmin(req: Request, res: Response) {
+  // Admin: Get all chats (filtered by domain)
+  async getAllAdmin(req: AuthRequest, res: Response) {
     try {
-      const chats = await Chat.find({}).sort({ updatedAt: -1 });
+      const user = req.user;
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const query: any = {
+        domain: req.user?.domain || req.userDomain, // Filter by user's domain
+      };
+
+      const chats = await Chat.find(query).sort({ updatedAt: -1 });
       res.json(chats);
     } catch (error) {
       console.error("Error fetching all chats:", error);
@@ -245,29 +254,43 @@ export const chatController = {
   },
 
   // Admin: Get chat statistics
-  async getStats(req: Request, res: Response) {
+  async getStats(req: AuthRequest, res: Response) {
     try {
-      const totalChats = await Chat.countDocuments({});
+      const user = req.user;
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const domain = req.user?.domain || req.userDomain;
+      const domainFilter = { domain };
+
+      const totalChats = await Chat.countDocuments(domainFilter);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const chatsToday = await Chat.countDocuments({
-        createdAt: { $gte: today },
+        ...domainFilter,
+        updatedAt: { $gte: today },
       });
 
       const thisWeek = new Date();
       thisWeek.setDate(thisWeek.getDate() - 7);
       const chatsThisWeek = await Chat.countDocuments({
-        createdAt: { $gte: thisWeek },
+        ...domainFilter,
+        updatedAt: { $gte: thisWeek },
       });
 
       const thisMonth = new Date();
       thisMonth.setMonth(thisMonth.getMonth() - 1);
       const chatsThisMonth = await Chat.countDocuments({
-        createdAt: { $gte: thisMonth },
+        ...domainFilter,
+        updatedAt: { $gte: thisMonth },
       });
 
-      // Get top documents by chat count
+      // Get top documents by chat count (filtered by domain)
       const topDocuments = await Chat.aggregate([
+        {
+          $match: domainFilter,
+        },
         {
           $group: {
             _id: "$documentId",
@@ -295,10 +318,19 @@ export const chatController = {
     }
   },
 
-  // Admin: Delete any chat by id (bypass ownership)
-  async deleteAnyAdmin(req: Request, res: Response) {
+  // Admin: Delete any chat by id (filtered by domain)
+  async deleteAnyAdmin(req: AuthRequest, res: Response) {
     try {
-      const chat = await Chat.findOneAndDelete({ id: req.params.id });
+      const user = req.user;
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const domain = req.user?.domain || req.userDomain;
+      const chat = await Chat.findOneAndDelete({
+        id: req.params.id,
+        domain, // Ensure admin can only delete chats from their domain
+      });
       if (!chat) {
         return res.status(404).json({ error: "Chat not found" });
       }

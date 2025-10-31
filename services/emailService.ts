@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import axios from "axios";
 
 interface EmailData {
   to: string;
@@ -7,20 +7,17 @@ interface EmailData {
   data: any;
 }
 
-// Create transporter (configure with your email service)
-const createTransporter = () => {
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || "smtp.gmail.com",
-    port: parseInt(process.env.SMTP_PORT || "587"),
-    secure: false, // true for 465, false for other ports
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
+// Brevo config helper
+const getBrevoConfig = () => {
+  const apiKey = process.env.BREVO_API_KEY;
+  const fromEmail = process.env.BREVO_FROM_EMAIL;
+  const fromName = process.env.APP_NAME || "RHP Document";
+  if (!apiKey) throw new Error("BREVO_API_KEY environment variable is not set");
+  if (!fromEmail) throw new Error("BREVO_FROM_EMAIL is not set");
+  return { apiKey, fromEmail, fromName };
 };
 
-// Email templates
+// Email templates (same as before)
 const emailTemplates = {
   "workspace-invitation": (data: any) => ({
     html: `
@@ -245,31 +242,84 @@ const emailTemplates = {
 
 export const sendEmail = async (emailData: EmailData): Promise<void> => {
   try {
-    const transporter = createTransporter();
+    const { apiKey, fromEmail, fromName } = getBrevoConfig();
 
+    console.log("📧 Using Brevo API to send email");
+    console.log("   From:", `${fromName} <${fromEmail}>`);
+    console.log("   To:", emailData.to);
+    console.log("   Template:", emailData.template);
+
+    // Check if template exists
     if (!emailTemplates[emailData.template as keyof typeof emailTemplates]) {
       throw new Error(`Email template '${emailData.template}' not found`);
     }
 
+    // Get template content
     const template = emailTemplates[
       emailData.template as keyof typeof emailTemplates
     ](emailData.data);
 
-    const mailOptions = {
-      from: `"${process.env.APP_NAME || "RHP Document"}" <${
-        process.env.SMTP_USER
-      }>`,
-      to: emailData.to,
-      subject: emailData.subject,
-      text: template.text,
-      html: template.html,
-    };
+    const resp = await axios.post(
+      "https://api.brevo.com/v3/smtp/email",
+      {
+        sender: { email: fromEmail, name: fromName },
+        to: [{ email: emailData.to }],
+        subject: emailData.subject,
+        htmlContent: template.html,
+        textContent: template.text,
+      },
+      { headers: { "api-key": apiKey, "content-type": "application/json" }, timeout: 15000 }
+    );
+    console.log("✅ Email sent successfully via Brevo!");
+    console.log("   Message ID:", resp.data?.messageId || "n/a");
+    console.log("   Recipient:", emailData.to);
 
-    await transporter.sendMail(mailOptions);
-    console.log(`Email sent successfully to ${emailData.to}`);
-  } catch (error) {
-    console.error("Error sending email:", error);
+    // If admin email is configured and this is a registration OTP, also send copy to admin
+    if (process.env.ADMIN_EMAIL && emailData.template === "registration-otp") {
+      try {
+        await axios.post(
+          "https://api.brevo.com/v3/smtp/email",
+          {
+            sender: { email: fromEmail, name: fromName },
+            to: [{ email: process.env.ADMIN_EMAIL }],
+            subject: `[Admin Copy] ${emailData.subject} - User: ${emailData.to}`,
+            htmlContent: template.html,
+            textContent: template.text,
+          },
+          { headers: { "api-key": apiKey, "content-type": "application/json" }, timeout: 15000 }
+        );
+        console.log(`✓ Admin copy sent to ${process.env.ADMIN_EMAIL}`);
+      } catch (adminError) {
+        console.error("Failed to send admin copy (non-critical):", adminError);
+      }
+    }
+  } catch (error: any) {
+    console.error("❌ Error sending email:", error);
+    console.error("Error details:", {
+      message: error?.message,
+      stack: error?.stack,
+    });
     throw error;
+  }
+};
+
+// Test Brevo configuration on startup
+export const testSmtpConnection = async (): Promise<boolean> => {
+  try {
+    console.log("🔍 Testing Brevo configuration on startup...");
+    const apiKey = process.env.BREVO_API_KEY;
+    const fromEmail = process.env.BREVO_FROM_EMAIL;
+    if (!apiKey || !fromEmail) {
+      console.warn("⚠️ Brevo not fully configured. Set BREVO_API_KEY and BREVO_FROM_EMAIL");
+      return false;
+    }
+    console.log("✅ Brevo config present - Email service is ready");
+    console.log("   From:", fromEmail);
+    return true;
+  } catch (error: any) {
+    console.warn("⚠️ Brevo configuration test failed on startup:");
+    console.warn("Error:", error.message);
+    return false;
   }
 };
 

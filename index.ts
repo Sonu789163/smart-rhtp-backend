@@ -20,10 +20,15 @@ import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import { testSmtpConnection } from "./services/emailService";
 
 dotenv.config();
 
 const app = express();
+
+// Trust proxy for Render deployment
+app.set('trust proxy', 1);
+
 const server = http.createServer(app);
 const io = new SocketIOServer(server, {
   cors: {
@@ -73,8 +78,12 @@ if (!MONGODB_URI) {
 
 mongoose
   .connect(MONGODB_URI)
-  .then(() => {
+  .then(async () => {
     console.log("Connected to MongoDB");
+    // Test SMTP connection on startup (non-blocking)
+    testSmtpConnection().catch((err) => {
+      console.error("SMTP test error:", err);
+    });
   })
   .catch((error) => {
     console.error("MongoDB connection error:", error);
@@ -98,6 +107,22 @@ app.use("/api/workspaces", workspaceRoutes);
 // Health check endpoint
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
+});
+
+// Global error handlers to prevent server crashes
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Don't exit the process, just log the error
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit the process, just log the error
+});
+
+// Handle EPIPE errors specifically
+process.on('SIGPIPE', () => {
+  console.log('SIGPIPE received, ignoring...');
 });
 
 server.listen(PORT, () => {

@@ -638,4 +638,173 @@ exports.documentController = {
             res.status(500).json({ error: "Failed to fetch documents" });
         }
     },
+    async getAvailableForCompare(req, res) {
+        try {
+            const { id } = req.params;
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            // Get the document to compare with
+            const document = await Document_1.Document.findOne({
+                id,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+            });
+            if (!document) {
+                return res.status(404).json({ error: "Document not found" });
+            }
+            // Determine the opposite document type
+            const oppositeType = document.type === "DRHP" ? "RHP" : "DRHP";
+            // Get all documents of the opposite type that are not already linked
+            const availableDocuments = await Document_1.Document.find({
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+                type: oppositeType,
+                // Exclude documents that are already linked to this document
+                $and: [
+                    { id: { $ne: document.id } },
+                    { relatedDrhpId: { $ne: document.id } },
+                    { relatedRhpId: { $ne: document.id } }
+                ]
+            }).select('id name type uploadedAt namespace').sort({ uploadedAt: -1 });
+            res.json({
+                selectedDocument: {
+                    id: document.id,
+                    name: document.name,
+                    type: document.type,
+                    uploadedAt: document.uploadedAt
+                },
+                availableDocuments
+            });
+        }
+        catch (error) {
+            console.error("Error fetching available documents for compare:", error);
+            res.status(500).json({ error: "Failed to fetch available documents" });
+        }
+    },
+    async linkForCompare(req, res) {
+        var _a, _b, _c;
+        try {
+            const { drhpId, rhpId } = req.body;
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            if (!drhpId || !rhpId) {
+                return res.status(400).json({ error: "Both DRHP and RHP IDs are required" });
+            }
+            // Verify both documents exist and belong to the user
+            const drhpDoc = await Document_1.Document.findOne({
+                id: drhpId,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+                type: "DRHP"
+            });
+            const rhpDoc = await Document_1.Document.findOne({
+                id: rhpId,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+                type: "RHP"
+            });
+            if (!drhpDoc || !rhpDoc) {
+                return res.status(404).json({ error: "One or both documents not found" });
+            }
+            // Check if documents are already linked
+            if (drhpDoc.relatedRhpId === rhpId || rhpDoc.relatedDrhpId === drhpId) {
+                return res.status(400).json({ error: "Documents are already linked" });
+            }
+            // Link the documents
+            drhpDoc.relatedRhpId = rhpId;
+            rhpDoc.relatedDrhpId = drhpId;
+            await drhpDoc.save();
+            await rhpDoc.save();
+            // Publish event for the linking
+            await (0, events_1.publishEvent)({
+                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                domain: req.userDomain,
+                action: "documents.linked",
+                resourceType: "document",
+                resourceId: drhpId,
+                title: `Documents linked for comparison: ${drhpDoc.name} ↔ ${rhpDoc.name}`,
+                notifyWorkspace: true,
+            });
+            res.json({
+                message: "Documents linked successfully for comparison",
+                drhpDocument: {
+                    id: drhpDoc.id,
+                    name: drhpDoc.name,
+                    type: drhpDoc.type
+                },
+                rhpDocument: {
+                    id: rhpDoc.id,
+                    name: rhpDoc.name,
+                    type: rhpDoc.type
+                }
+            });
+        }
+        catch (error) {
+            console.error("Error linking documents for compare:", error);
+            res.status(500).json({ error: "Failed to link documents" });
+        }
+    },
+    async unlinkForCompare(req, res) {
+        var _a, _b, _c;
+        try {
+            const { id } = req.params;
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const document = await Document_1.Document.findOne({
+                id,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+            });
+            if (!document) {
+                return res.status(404).json({ error: "Document not found" });
+            }
+            let linkedDocument = null;
+            // Unlink based on document type
+            if (document.type === "DRHP" && document.relatedRhpId) {
+                linkedDocument = await Document_1.Document.findOne({
+                    id: document.relatedRhpId,
+                    domain: req.userDomain,
+                    workspaceId: currentWorkspace,
+                });
+                if (linkedDocument) {
+                    linkedDocument.relatedDrhpId = undefined;
+                    await linkedDocument.save();
+                }
+                document.relatedRhpId = undefined;
+                await document.save();
+            }
+            else if (document.type === "RHP" && document.relatedDrhpId) {
+                linkedDocument = await Document_1.Document.findOne({
+                    id: document.relatedDrhpId,
+                    domain: req.userDomain,
+                    workspaceId: currentWorkspace,
+                });
+                if (linkedDocument) {
+                    linkedDocument.relatedRhpId = undefined;
+                    await linkedDocument.save();
+                }
+                document.relatedDrhpId = undefined;
+                await document.save();
+            }
+            // Publish event for the unlinking
+            await (0, events_1.publishEvent)({
+                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                domain: req.userDomain,
+                action: "documents.unlinked",
+                resourceType: "document",
+                resourceId: document.id,
+                title: `Documents unlinked: ${document.name}`,
+                notifyWorkspace: true,
+            });
+            res.json({
+                message: "Documents unlinked successfully",
+                unlinkedDocument: {
+                    id: document.id,
+                    name: document.name,
+                    type: document.type
+                }
+            });
+        }
+        catch (error) {
+            console.error("Error unlinking documents:", error);
+            res.status(500).json({ error: "Failed to unlink documents" });
+        }
+    },
 };
