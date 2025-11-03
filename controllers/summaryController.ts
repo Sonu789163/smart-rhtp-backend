@@ -1,6 +1,8 @@
 /// <reference path="../types/html-docx-js.d.ts" />
 import { Request, Response } from "express";
 import { Summary } from "../models/Summary";
+import { User } from "../models/User";
+import { Document } from "../models/Document";
 import axios from "axios";
 import { writeFile, unlink } from "fs/promises";
 import { exec } from "child_process";
@@ -87,12 +89,44 @@ export const summaryController = {
       // Get current workspace from request
       const currentWorkspace = req.currentWorkspace || req.userDomain;
 
+      // Get domainId - try from user first, then from document as fallback
+      let domainId: string | undefined;
+      
+      // Try to get from user
+      if (req.user?._id) {
+        const userWithDomain = await User.findById(req.user._id).select("domainId");
+        if (userWithDomain?.domainId) {
+          domainId = userWithDomain.domainId;
+        }
+      }
+      
+      // Fallback: Get domainId from document if user domainId not available
+      if (!domainId && documentId) {
+        try {
+          const doc = await Document.findOne({ id: documentId }).select("domainId");
+          if (doc?.domainId) {
+            domainId = doc.domainId;
+            console.log(`Retrieved domainId from document: ${domainId}`);
+          }
+        } catch (docError) {
+          console.warn("Could not fetch document to get domainId:", docError);
+        }
+      }
+      
+      if (!domainId) {
+        return res.status(400).json({ 
+          error: "domainId not found. Please contact administrator.",
+          message: "Failed to create summary - missing domainId. Could not retrieve from user or document."
+        });
+      }
+
       const summaryData: any = {
         id: Date.now().toString(),
         title,
         content,
         documentId,
-        domain: req.userDomain, // Add domain for workspace isolation
+        domain: req.userDomain, // Add domain for workspace isolation - backward compatibility
+        domainId: domainId, // Link to Domain schema - REQUIRED
         workspaceId: currentWorkspace, // Add workspace for team isolation
         updatedAt: new Date(),
       };

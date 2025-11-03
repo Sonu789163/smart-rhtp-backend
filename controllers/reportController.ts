@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import { Report } from "../models/Report";
+import { User } from "../models/User";
+import { Document } from "../models/Document";
 import axios from "axios";
 import { io } from "../index";
 import { publishEvent } from "../lib/events";
@@ -87,6 +89,50 @@ export const reportController = {
       // Get current workspace from request
       const currentWorkspace = req.currentWorkspace || req.userDomain;
 
+      // Get domainId - try from user first, then from document as fallback
+      let domainId: string | undefined;
+      
+      // Try to get from user
+      if (req.user?._id) {
+        const userWithDomain = await User.findById(req.user._id).select("domainId");
+        if (userWithDomain?.domainId) {
+          domainId = userWithDomain.domainId;
+        }
+      }
+      
+      // Fallback: Get domainId from DRHP document if user domainId not available
+      if (!domainId && drhpId) {
+        try {
+          const drhpDoc = await Document.findOne({ id: drhpId }).select("domainId");
+          if (drhpDoc?.domainId) {
+            domainId = drhpDoc.domainId;
+            console.log(`Retrieved domainId from DRHP document: ${domainId}`);
+          }
+        } catch (docError) {
+          console.warn("Could not fetch DRHP document to get domainId:", docError);
+        }
+      }
+      
+      // Fallback: Get domainId from RHP document if still not available
+      if (!domainId && rhpId) {
+        try {
+          const rhpDoc = await Document.findOne({ id: rhpId }).select("domainId");
+          if (rhpDoc?.domainId) {
+            domainId = rhpDoc.domainId;
+            console.log(`Retrieved domainId from RHP document: ${domainId}`);
+          }
+        } catch (docError) {
+          console.warn("Could not fetch RHP document to get domainId:", docError);
+        }
+      }
+      
+      if (!domainId) {
+        return res.status(400).json({ 
+          error: "domainId not found. Please contact administrator.",
+          message: "Failed to create report - missing domainId. Could not retrieve from user or documents."
+        });
+      }
+
       // Ensure one report per DRHP/RHP pair in the workspace: replace previous if exists
       await Report.deleteMany({
         domain: req.userDomain,
@@ -103,7 +149,8 @@ export const reportController = {
         rhpId,
         drhpNamespace,
         rhpNamespace,
-        domain: req.userDomain, // Add domain for workspace isolation
+        domain: req.userDomain, // Add domain for workspace isolation - backward compatibility
+        domainId: domainId, // Link to Domain schema - REQUIRED
         workspaceId: currentWorkspace, // Add workspace for team isolation
         updatedAt: new Date(),
       };
