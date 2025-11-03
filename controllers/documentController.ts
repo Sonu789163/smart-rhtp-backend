@@ -494,12 +494,15 @@ export const documentController = {
         return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
       }
 
+      // Determine document type from request body, default to DRHP
+      const documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
+      
       const docData: any = {
         id: req.body.id || fileKey, // Use provided id from frontend or fallback to fileKey
         name: originalname,
         fileKey: fileKey,
         namespace: originalname || req.body.namespace, // Use original name directly to preserve .pdf
-        type: "DRHP", // Set type for DRHP documents
+        type: documentType, // Set type based on request (DRHP or RHP)
         status: "processing", // Set status to processing initially - n8n will update to completed
         domain: user.domain, // Add domain for workspace isolation - backward compatibility
         domainId: userWithDomain.domainId, // Link to Domain schema
@@ -537,9 +540,10 @@ export const documentController = {
         notifyWorkspace: true,
       });
 
-      // Notify n8n for further processing
-      const n8nWebhookUrl =
-        "https://n8n-excollo.azurewebsites.net/webhook/bfda1ff3-99be-4f6e-995f-7728ca5b2f6a";
+      // Notify n8n for further processing - choose webhook based on document type
+      const n8nWebhookUrl = documentType === "RHP"
+        ? "https://n8n-excollo.azurewebsites.net/webhook/upload-rhp"
+        : "https://n8n-excollo.azurewebsites.net/webhook/bfda1ff3-99be-4f6e-995f-7728ca5b2f6a";
 
       // Download file from S3 and send to n8n
       const getObjectCommand = new GetObjectCommand({
@@ -558,6 +562,7 @@ export const documentController = {
       form.append("domain", document.domain || user.domain);
       form.append("domainId", document.domainId || userWithDomain.domainId);
       form.append("workspaceId", document.workspaceId || workspaceId);
+      form.append("type", document.type); // Include document type in n8n request
 
       // Send to n8n and check response for status
       try {
