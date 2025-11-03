@@ -1,8 +1,6 @@
 /// <reference path="../types/html-docx-js.d.ts" />
 import { Request, Response } from "express";
 import { Summary } from "../models/Summary";
-import { Document } from "../models/Document";
-import { Domain } from "../models/Domain";
 import { User } from "../models/User";
 import axios from "axios";
 import { writeFile, unlink } from "fs/promises";
@@ -79,7 +77,7 @@ export const summaryController = {
 
   async create(req: AuthRequest, res: Response) {
     try {
-      const { title, content, documentId } = req.body;
+      const { title, content, documentId, domainId: bodyDomainId, domain: bodyDomain } = req.body;
       if (!title || !content || !documentId) {
         return res.status(400).json({
           message: "Missing required fields",
@@ -89,57 +87,37 @@ export const summaryController = {
 
       // Get current workspace from request
       const currentWorkspace = req.currentWorkspace || req.userDomain;
+      const actualDomain = req.userDomain || bodyDomain;
 
-      // Resolve domainId - can come from request body, user, or document
-      let domainId: string | undefined = req.body.domainId;
-      let domain: string | undefined = req.body.domain || req.userDomain;
-
-      // If domainId not in request body, try to get it
+      // Get domainId - priority: 1) from request body (n8n), 2) from user, 3) from domain name lookup
+      let domainId: string | undefined = bodyDomainId;
+      
       if (!domainId) {
-        // Try from domain name if we have it
-        if (domain) {
-          try {
-            const domainRecord = await Domain.findOne({ domainName: domain, status: "active" });
-            if (domainRecord) {
-              domainId = domainRecord.domainId;
-            }
-          } catch (error) {
-            console.error("Error fetching domainId from Domain:", error);
-          }
-        }
-
-        // Fallback: get from document
-        if (!domainId && documentId) {
-          try {
-            const doc = await Document.findOne({ id: documentId });
-            if (doc && (doc as any).domainId) {
-              domainId = (doc as any).domainId;
-              if (!domain) domain = doc.domain;
-            }
-          } catch (error) {
-            console.error("Error fetching domainId from document:", error);
-          }
-        }
-
-        // Fallback: get from user if available
-        if (!domainId && req.user?._id) {
-          try {
-            const user = await User.findById(req.user._id).select("domainId domain");
-            if (user && (user as any).domainId) {
-              domainId = (user as any).domainId;
-              if (!domain) domain = user.domain;
-            }
-          } catch (error) {
-            console.error("Error fetching domainId from user:", error);
-          }
+        // Try to get from user if available
+        const user = req.user;
+        if (user?._id) {
+          const userWithDomain = await User.findById(user._id).select("domainId").lean();
+          domainId = userWithDomain?.domainId || (userWithDomain as any)?.domainId;
         }
       }
-
-      // If still no domainId, we cannot proceed
-      if (!domainId || !domain) {
-        return res.status(400).json({
-          error: "domainId and domain are required",
-          message: "Unable to determine domainId. Please ensure domainId is provided in request body or linked to the document.",
+      
+      // If domainId still not found, try to get it from the domain name
+      if (!domainId && actualDomain) {
+        try {
+          const { Domain } = await import("../models/Domain");
+          const domainRecord = await Domain.findOne({ domainName: actualDomain, status: "active" });
+          if (domainRecord) {
+            domainId = domainRecord.domainId;
+          }
+        } catch (error) {
+          console.error("Error fetching domainId from Domain model:", error);
+        }
+      }
+      
+      if (!domainId) {
+        return res.status(400).json({ 
+          error: "domainId is required. Unable to determine domainId from request body, user, or domain.",
+          message: "Please ensure domainId is included in the request body or contact administrator."
         });
       }
 
@@ -148,8 +126,8 @@ export const summaryController = {
         title,
         content,
         documentId,
-        domain: domain, // Add domain for workspace isolation
-        domainId: domainId, // Link to Domain schema - REQUIRED
+        domain: actualDomain, // Add domain for workspace isolation - backward compatibility
+        domainId: domainId, // Link to Domain schema (required)
         workspaceId: currentWorkspace, // Add workspace for team isolation
         updatedAt: new Date(),
       };
@@ -166,16 +144,18 @@ export const summaryController = {
       const summary = new Summary(summaryData);
       await summary.save();
 
-      // Publish event for workspace notification
-      await publishEvent({
-        actorUserId: req.user?._id?.toString?.(),
-        domain: req.userDomain!,
-        action: "summary.created",
-        resourceType: "summary",
-        resourceId: summary.id,
-        title: `New summary created: ${summary.title}`,
-        notifyWorkspace: true,
-      });
+      // Publish event for workspace notification (only if user context available)
+      if (req.user?._id && req.userDomain) {
+        await publishEvent({
+          actorUserId: req.user._id.toString(),
+          domain: req.userDomain,
+          action: "summary.created",
+          resourceType: "summary",
+          resourceId: summary.id,
+          title: `New summary created: ${summary.title}`,
+          notifyWorkspace: true,
+        });
+      }
 
       res.status(201).json(summary);
     } catch (error) {
