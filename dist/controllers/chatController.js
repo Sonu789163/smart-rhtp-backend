@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.chatController = void 0;
 const Chat_1 = require("../models/Chat");
 const Document_1 = require("../models/Document");
+const User_1 = require("../models/User");
 const index_1 = require("../index");
 exports.chatController = {
     async getAll(req, res) {
@@ -74,8 +75,14 @@ exports.chatController = {
             if (!document) {
                 return res.status(404).json({ error: "Document not found" });
             }
-            // Add domain and workspace to chat data
+            // Get user's domainId
+            const userWithDomain = await User_1.User.findById(user._id).select("domainId");
+            if (!(userWithDomain === null || userWithDomain === void 0 ? void 0 : userWithDomain.domainId)) {
+                return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
+            }
+            // Add domain, domainId, and workspace to chat data
             chatData.domain = req.userDomain;
+            chatData.domainId = userWithDomain.domainId; // Link to Domain schema
             chatData.workspaceId = currentWorkspace;
             if (user.microsoftId) {
                 chatData.microsoftId = user.microsoftId;

@@ -681,21 +681,44 @@ export const documentController = {
 
   async uploadStatusUpdate(req: AuthRequest, res: Response) {
     try {
-      const { jobId, status, error } = req.body;
-      if (!jobId || !status) {
-        return res.status(400).json({ message: "Missing jobId or status" });
+      // Accept both jobId and documentId from n8n (n8n might send either)
+      const { jobId, documentId, status, error } = req.body;
+      const identifier = jobId || documentId;
+      
+      if (!identifier || !status) {
+        return res.status(400).json({ 
+          message: "Missing jobId/documentId or status",
+          received: { jobId, documentId, status }
+        });
       }
       
       const normalizedStatus = status.trim().toLowerCase();
+      console.log(`📥 Received status update for ${identifier}: ${normalizedStatus}`);
       
-      // Update document status in MongoDB
+      // Update document status in MongoDB - try multiple lookup methods
       try {
-        const document = await Document.findOne({ id: jobId });
+        let document = await Document.findOne({ id: identifier });
+        
+        // If not found by id, try by documentId field
+        if (!document && documentId) {
+          document = await Document.findOne({ id: documentId });
+        }
+        
+        // If still not found, try by fileKey
+        if (!document) {
+          document = await Document.findOne({ fileKey: identifier });
+        }
+        
+        // If still not found, try by _id (MongoDB ObjectId)
+        if (!document && identifier.match(/^[0-9a-fA-F]{24}$/)) {
+          document = await Document.findById(identifier);
+        }
+        
         if (document) {
           // Map n8n status to our document status
           let newStatus = document.status; // Default to current status
           
-          if (normalizedStatus === "completed" || normalizedStatus === "ready") {
+          if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
             newStatus = "completed";
           } else if (normalizedStatus === "failed" || normalizedStatus === "error") {
             newStatus = "failed";
@@ -703,37 +726,80 @@ export const documentController = {
             newStatus = "processing";
           }
           
-          // Only update if status has changed
+          // Always update if status is "completed" (force update even if already completed)
           const oldStatus = document.status;
-          if (oldStatus !== newStatus) {
+          const shouldUpdate = oldStatus !== newStatus || (newStatus === "completed" && oldStatus === "processing");
+          
+          if (shouldUpdate) {
             document.status = newStatus;
             await document.save();
-            console.log(`✅ Updated document ${jobId} status from "${oldStatus}" to "${newStatus}"`);
+            console.log(`✅ Updated document ${document.id} (${document.name}) status from "${oldStatus}" to "${newStatus}"`);
+            
+            // Also try to find and update by MongoDB _id to ensure persistence
+            try {
+              await Document.updateOne(
+                { _id: document._id },
+                { $set: { status: newStatus } }
+              );
+              console.log(`✅ Confirmed MongoDB update for document ${document.id}`);
+            } catch (updateError) {
+              console.error(`⚠️ Secondary update failed (non-critical):`, updateError);
+            }
           } else {
-            console.log(`ℹ️ Document ${jobId} status unchanged: "${newStatus}"`);
+            console.log(`ℹ️ Document ${document.id} status unchanged: "${oldStatus}"`);
           }
+          
+          // Use the found document's id for socket emission
+          const actualJobId = document.id;
+          io.emit("upload_status", { jobId: actualJobId, status: normalizedStatus, error });
+          
+          res.status(200).json({
+            message: "Upload status update processed",
+            jobId: actualJobId,
+            documentId: document.id,
+            status: normalizedStatus,
+            previousStatus: oldStatus,
+            newStatus: newStatus,
+            error,
+          });
         } else {
-          console.warn(`⚠️ Document not found for jobId: ${jobId}`);
+          console.warn(`⚠️ Document not found for identifier: ${identifier}`);
+          console.warn(`   Tried: id=${identifier}, documentId=${documentId}, fileKey lookup, _id lookup`);
+          
+          // Still emit socket event even if document not found (for debugging)
+          io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: error || "Document not found" });
+          
+          res.status(404).json({
+            message: "Document not found",
+            identifier,
+            status: normalizedStatus,
+            error: "Document not found in database",
+          });
         }
-      } catch (dbError) {
-        console.error("Error updating document status in database:", dbError);
-        // Continue even if DB update fails - still emit socket event
+      } catch (dbError: any) {
+        console.error("❌ Error updating document status in database:", dbError);
+        console.error("   Error details:", {
+          message: dbError.message,
+          stack: dbError.stack,
+          name: dbError.name,
+        });
+        
+        // Still emit socket event for debugging
+        io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: dbError.message });
+        
+        res.status(500).json({
+          message: "Failed to update document status",
+          identifier,
+          status: normalizedStatus,
+          error: dbError.message || "Database error",
+        });
       }
-      
-      // Emit socket event for status updates (both success and failure)
-      io.emit("upload_status", { jobId, status: normalizedStatus, error });
-      
-      res.status(200).json({
-        message: "Upload status update processed",
-        jobId,
-        status: normalizedStatus,
-        error,
-      });
-    } catch (err) {
-      console.error("Error in uploadStatusUpdate:", err);
+    } catch (err: any) {
+      console.error("❌ Error in uploadStatusUpdate:", err);
+      console.error("   Full error:", JSON.stringify(err, Object.getOwnPropertyNames(err)));
       res.status(500).json({
         message: "Failed to process upload status update",
-        error: err instanceof Error ? err.message : err,
+        error: err instanceof Error ? err.message : String(err),
       });
     }
   },

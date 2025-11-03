@@ -38,6 +38,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.reportController = void 0;
 const Report_1 = require("../models/Report");
+const Document_1 = require("../models/Document");
+const Domain_1 = require("../models/Domain");
+const User_1 = require("../models/User");
 const axios_1 = __importDefault(require("axios"));
 const index_1 = require("../index");
 const events_1 = require("../lib/events");
@@ -84,7 +87,7 @@ exports.reportController = {
         }
     },
     async create(req, res) {
-        var _a, _b, _c;
+        var _a, _b, _c, _d;
         try {
             const { title, content, drhpId, rhpId, drhpNamespace, rhpNamespace } = req.body;
             if (!title ||
@@ -107,9 +110,62 @@ exports.reportController = {
             }
             // Get current workspace from request
             const currentWorkspace = req.currentWorkspace || req.userDomain;
+            // Resolve domainId - can come from request body, user, or document
+            let domainId = req.body.domainId;
+            let domain = req.body.domain || req.userDomain;
+            // If domainId not in request body, try to get it
+            if (!domainId) {
+                // Try from domain name if we have it
+                if (domain) {
+                    try {
+                        const domainRecord = await Domain_1.Domain.findOne({ domainName: domain, status: "active" });
+                        if (domainRecord) {
+                            domainId = domainRecord.domainId;
+                        }
+                    }
+                    catch (error) {
+                        console.error("Error fetching domainId from Domain:", error);
+                    }
+                }
+                // Fallback: get from DRHP document
+                if (!domainId && drhpId) {
+                    try {
+                        const drhpDoc = await Document_1.Document.findOne({ id: drhpId });
+                        if (drhpDoc && drhpDoc.domainId) {
+                            domainId = drhpDoc.domainId;
+                            if (!domain)
+                                domain = drhpDoc.domain;
+                        }
+                    }
+                    catch (error) {
+                        console.error("Error fetching domainId from document:", error);
+                    }
+                }
+                // Fallback: get from user if available
+                if (!domainId && ((_a = req.user) === null || _a === void 0 ? void 0 : _a._id)) {
+                    try {
+                        const user = await User_1.User.findById(req.user._id).select("domainId domain");
+                        if (user && user.domainId) {
+                            domainId = user.domainId;
+                            if (!domain)
+                                domain = user.domain;
+                        }
+                    }
+                    catch (error) {
+                        console.error("Error fetching domainId from user:", error);
+                    }
+                }
+            }
+            // If still no domainId, we cannot proceed
+            if (!domainId || !domain) {
+                return res.status(400).json({
+                    error: "domainId and domain are required",
+                    message: "Unable to determine domainId. Please ensure domainId is provided in request body or linked to the documents.",
+                });
+            }
             // Ensure one report per DRHP/RHP pair in the workspace: replace previous if exists
             await Report_1.Report.deleteMany({
-                domain: req.userDomain,
+                domain: domain,
                 workspaceId: currentWorkspace,
                 drhpNamespace,
                 rhpNamespace,
@@ -122,7 +178,8 @@ exports.reportController = {
                 rhpId,
                 drhpNamespace,
                 rhpNamespace,
-                domain: req.userDomain, // Add domain for workspace isolation
+                domain: domain, // Add domain for workspace isolation
+                domainId: domainId, // Link to Domain schema - REQUIRED
                 workspaceId: currentWorkspace, // Add workspace for team isolation
                 updatedAt: new Date(),
             };
@@ -130,7 +187,7 @@ exports.reportController = {
             await report.save();
             // Publish event for workspace notification
             await (0, events_1.publishEvent)({
-                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                actorUserId: (_d = (_c = (_b = req.user) === null || _b === void 0 ? void 0 : _b._id) === null || _c === void 0 ? void 0 : _c.toString) === null || _d === void 0 ? void 0 : _d.call(_c),
                 domain: req.userDomain,
                 action: "report.created",
                 resourceType: "report",

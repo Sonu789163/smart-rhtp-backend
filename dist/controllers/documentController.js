@@ -478,12 +478,14 @@ exports.documentController = {
             if (!(userWithDomain === null || userWithDomain === void 0 ? void 0 : userWithDomain.domainId)) {
                 return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
             }
+            // Determine document type from request body, default to DRHP
+            const documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
             const docData = {
                 id: req.body.id || fileKey, // Use provided id from frontend or fallback to fileKey
                 name: originalname,
                 fileKey: fileKey,
                 namespace: originalname || req.body.namespace, // Use original name directly to preserve .pdf
-                type: "DRHP", // Set type for DRHP documents
+                type: documentType, // Set type based on request (DRHP or RHP)
                 status: "processing", // Set status to processing initially - n8n will update to completed
                 domain: user.domain, // Add domain for workspace isolation - backward compatibility
                 domainId: userWithDomain.domainId, // Link to Domain schema
@@ -519,8 +521,10 @@ exports.documentController = {
                 title: `Document uploaded: ${document.name}`,
                 notifyWorkspace: true,
             });
-            // Notify n8n for further processing
-            const n8nWebhookUrl = "https://n8n-excollo.azurewebsites.net/webhook/bfda1ff3-99be-4f6e-995f-7728ca5b2f6a";
+            // Notify n8n for further processing - choose webhook based on document type
+            const n8nWebhookUrl = documentType === "RHP"
+                ? "https://n8n-excollo.azurewebsites.net/webhook/upload-rhp"
+                : "https://n8n-excollo.azurewebsites.net/webhook/bfda1ff3-99be-4f6e-995f-7728ca5b2f6a";
             // Download file from S3 and send to n8n
             const getObjectCommand = new client_s3_1.GetObjectCommand({
                 Bucket: r2_1.R2_BUCKET,
@@ -538,6 +542,7 @@ exports.documentController = {
             form.append("domain", document.domain || user.domain);
             form.append("domainId", document.domainId || userWithDomain.domainId);
             form.append("workspaceId", document.workspaceId || workspaceId);
+            form.append("type", document.type); // Include document type in n8n request
             // Send to n8n and check response for status
             try {
                 const n8nResponse = await axios_1.default.post(n8nWebhookUrl, form, {
@@ -650,18 +655,36 @@ exports.documentController = {
     },
     async uploadStatusUpdate(req, res) {
         try {
-            const { jobId, status, error } = req.body;
-            if (!jobId || !status) {
-                return res.status(400).json({ message: "Missing jobId or status" });
+            // Accept both jobId and documentId from n8n (n8n might send either)
+            const { jobId, documentId, status, error } = req.body;
+            const identifier = jobId || documentId;
+            if (!identifier || !status) {
+                return res.status(400).json({
+                    message: "Missing jobId/documentId or status",
+                    received: { jobId, documentId, status }
+                });
             }
             const normalizedStatus = status.trim().toLowerCase();
-            // Update document status in MongoDB
+            console.log(`📥 Received status update for ${identifier}: ${normalizedStatus}`);
+            // Update document status in MongoDB - try multiple lookup methods
             try {
-                const document = await Document_1.Document.findOne({ id: jobId });
+                let document = await Document_1.Document.findOne({ id: identifier });
+                // If not found by id, try by documentId field
+                if (!document && documentId) {
+                    document = await Document_1.Document.findOne({ id: documentId });
+                }
+                // If still not found, try by fileKey
+                if (!document) {
+                    document = await Document_1.Document.findOne({ fileKey: identifier });
+                }
+                // If still not found, try by _id (MongoDB ObjectId)
+                if (!document && identifier.match(/^[0-9a-fA-F]{24}$/)) {
+                    document = await Document_1.Document.findById(identifier);
+                }
                 if (document) {
                     // Map n8n status to our document status
                     let newStatus = document.status; // Default to current status
-                    if (normalizedStatus === "completed" || normalizedStatus === "ready") {
+                    if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
                         newStatus = "completed";
                     }
                     else if (normalizedStatus === "failed" || normalizedStatus === "error") {
@@ -670,39 +693,74 @@ exports.documentController = {
                     else if (normalizedStatus === "processing") {
                         newStatus = "processing";
                     }
-                    // Only update if status has changed
+                    // Always update if status is "completed" (force update even if already completed)
                     const oldStatus = document.status;
-                    if (oldStatus !== newStatus) {
+                    const shouldUpdate = oldStatus !== newStatus || (newStatus === "completed" && oldStatus === "processing");
+                    if (shouldUpdate) {
                         document.status = newStatus;
                         await document.save();
-                        console.log(`✅ Updated document ${jobId} status from "${oldStatus}" to "${newStatus}"`);
+                        console.log(`✅ Updated document ${document.id} (${document.name}) status from "${oldStatus}" to "${newStatus}"`);
+                        // Also try to find and update by MongoDB _id to ensure persistence
+                        try {
+                            await Document_1.Document.updateOne({ _id: document._id }, { $set: { status: newStatus } });
+                            console.log(`✅ Confirmed MongoDB update for document ${document.id}`);
+                        }
+                        catch (updateError) {
+                            console.error(`⚠️ Secondary update failed (non-critical):`, updateError);
+                        }
                     }
                     else {
-                        console.log(`ℹ️ Document ${jobId} status unchanged: "${newStatus}"`);
+                        console.log(`ℹ️ Document ${document.id} status unchanged: "${oldStatus}"`);
                     }
+                    // Use the found document's id for socket emission
+                    const actualJobId = document.id;
+                    index_1.io.emit("upload_status", { jobId: actualJobId, status: normalizedStatus, error });
+                    res.status(200).json({
+                        message: "Upload status update processed",
+                        jobId: actualJobId,
+                        documentId: document.id,
+                        status: normalizedStatus,
+                        previousStatus: oldStatus,
+                        newStatus: newStatus,
+                        error,
+                    });
                 }
                 else {
-                    console.warn(`⚠️ Document not found for jobId: ${jobId}`);
+                    console.warn(`⚠️ Document not found for identifier: ${identifier}`);
+                    console.warn(`   Tried: id=${identifier}, documentId=${documentId}, fileKey lookup, _id lookup`);
+                    // Still emit socket event even if document not found (for debugging)
+                    index_1.io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: error || "Document not found" });
+                    res.status(404).json({
+                        message: "Document not found",
+                        identifier,
+                        status: normalizedStatus,
+                        error: "Document not found in database",
+                    });
                 }
             }
             catch (dbError) {
-                console.error("Error updating document status in database:", dbError);
-                // Continue even if DB update fails - still emit socket event
+                console.error("❌ Error updating document status in database:", dbError);
+                console.error("   Error details:", {
+                    message: dbError.message,
+                    stack: dbError.stack,
+                    name: dbError.name,
+                });
+                // Still emit socket event for debugging
+                index_1.io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: dbError.message });
+                res.status(500).json({
+                    message: "Failed to update document status",
+                    identifier,
+                    status: normalizedStatus,
+                    error: dbError.message || "Database error",
+                });
             }
-            // Emit socket event for status updates (both success and failure)
-            index_1.io.emit("upload_status", { jobId, status: normalizedStatus, error });
-            res.status(200).json({
-                message: "Upload status update processed",
-                jobId,
-                status: normalizedStatus,
-                error,
-            });
         }
         catch (err) {
-            console.error("Error in uploadStatusUpdate:", err);
+            console.error("❌ Error in uploadStatusUpdate:", err);
+            console.error("   Full error:", JSON.stringify(err, Object.getOwnPropertyNames(err)));
             res.status(500).json({
                 message: "Failed to process upload status update",
-                error: err instanceof Error ? err.message : err,
+                error: err instanceof Error ? err.message : String(err),
             });
         }
     },
