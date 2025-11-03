@@ -484,6 +484,7 @@ exports.documentController = {
                 fileKey: fileKey,
                 namespace: originalname || req.body.namespace, // Use original name directly to preserve .pdf
                 type: "DRHP", // Set type for DRHP documents
+                status: "processing", // Set status to processing initially - n8n will update to completed
                 domain: user.domain, // Add domain for workspace isolation - backward compatibility
                 domainId: userWithDomain.domainId, // Link to Domain schema
                 workspaceId, // Workspace required - middleware ensures it's set
@@ -682,6 +683,7 @@ exports.documentController = {
                 namespace: req.file.originalname, // Use original filename with .pdf extension
                 rhpNamespace: rhpNamespace,
                 type: "RHP",
+                status: "processing", // Set status to processing initially - n8n will update to completed
                 relatedDrhpId: drhp.id,
                 domain: user.domain, // Add domain for workspace isolation - backward compatibility
                 domainId: userWithDomain.domainId, // Link to Domain schema
