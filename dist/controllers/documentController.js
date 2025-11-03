@@ -459,7 +459,7 @@ exports.documentController = {
         }
     },
     async uploadDocument(req, res) {
-        var _a, _b, _c;
+        var _a, _b, _c, _d, _e, _f;
         try {
             if (!req.file) {
                 return res.status(400).json({ error: "No file uploaded" });
@@ -538,15 +538,35 @@ exports.documentController = {
             form.append("domain", document.domain || user.domain);
             form.append("domainId", document.domainId || userWithDomain.domainId);
             form.append("workspaceId", document.workspaceId || workspaceId);
+            // Send to n8n and check response for status
             try {
-                await axios_1.default.post(n8nWebhookUrl, form, {
+                const n8nResponse = await axios_1.default.post(n8nWebhookUrl, form, {
                     headers: form.getHeaders(),
                     maxContentLength: Infinity,
                     maxBodyLength: Infinity,
+                    timeout: 300000, // 5 minutes timeout
                 });
+                // Check if n8n returned a status in the response
+                if (n8nResponse === null || n8nResponse === void 0 ? void 0 : n8nResponse.data) {
+                    const n8nStatus = ((_d = n8nResponse.data) === null || _d === void 0 ? void 0 : _d.status) || ((_e = n8nResponse.data) === null || _e === void 0 ? void 0 : _e.documentStatus);
+                    const normalizedStatus = (_f = n8nStatus === null || n8nStatus === void 0 ? void 0 : n8nStatus.toLowerCase()) === null || _f === void 0 ? void 0 : _f.trim();
+                    // If n8n returned a completed/ready status, update the document immediately
+                    if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
+                        document.status = "completed";
+                        await document.save();
+                        console.log(`✅ Document ${document.id} status updated to "completed" from n8n response`);
+                    }
+                    else if (normalizedStatus === "failed" || normalizedStatus === "error") {
+                        document.status = "failed";
+                        await document.save();
+                        console.log(`❌ Document ${document.id} status updated to "failed" from n8n response`);
+                    }
+                    // If status is "processing" or undefined, keep the default "processing" status
+                }
             }
             catch (n8nErr) {
                 console.error("Failed to send file to n8n:", n8nErr);
+                // Even if n8n call fails, return the document (it's already saved with "processing" status)
             }
             res.status(201).json({ message: "File uploaded successfully", document });
         }
@@ -634,18 +654,52 @@ exports.documentController = {
             if (!jobId || !status) {
                 return res.status(400).json({ message: "Missing jobId or status" });
             }
-            // Only emit on failure
-            if (status.trim().toLowerCase() === "failed") {
-                index_1.io.emit("upload_status", { jobId, status, error });
+            const normalizedStatus = status.trim().toLowerCase();
+            // Update document status in MongoDB
+            try {
+                const document = await Document_1.Document.findOne({ id: jobId });
+                if (document) {
+                    // Map n8n status to our document status
+                    let newStatus = document.status; // Default to current status
+                    if (normalizedStatus === "completed" || normalizedStatus === "ready") {
+                        newStatus = "completed";
+                    }
+                    else if (normalizedStatus === "failed" || normalizedStatus === "error") {
+                        newStatus = "failed";
+                    }
+                    else if (normalizedStatus === "processing") {
+                        newStatus = "processing";
+                    }
+                    // Only update if status has changed
+                    const oldStatus = document.status;
+                    if (oldStatus !== newStatus) {
+                        document.status = newStatus;
+                        await document.save();
+                        console.log(`✅ Updated document ${jobId} status from "${oldStatus}" to "${newStatus}"`);
+                    }
+                    else {
+                        console.log(`ℹ️ Document ${jobId} status unchanged: "${newStatus}"`);
+                    }
+                }
+                else {
+                    console.warn(`⚠️ Document not found for jobId: ${jobId}`);
+                }
             }
+            catch (dbError) {
+                console.error("Error updating document status in database:", dbError);
+                // Continue even if DB update fails - still emit socket event
+            }
+            // Emit socket event for status updates (both success and failure)
+            index_1.io.emit("upload_status", { jobId, status: normalizedStatus, error });
             res.status(200).json({
                 message: "Upload status update processed",
                 jobId,
-                status,
+                status: normalizedStatus,
                 error,
             });
         }
         catch (err) {
+            console.error("Error in uploadStatusUpdate:", err);
             res.status(500).json({
                 message: "Failed to process upload status update",
                 error: err instanceof Error ? err.message : err,
@@ -653,6 +707,7 @@ exports.documentController = {
         }
     },
     async uploadRhp(req, res) {
+        var _a, _b, _c;
         try {
             const { drhpId } = req.body;
             if (!req.file)
@@ -719,19 +774,42 @@ exports.documentController = {
             form.append("domain", rhpDoc.domain || user.domain);
             form.append("domainId", rhpDoc.domainId || userWithDomain.domainId);
             form.append("workspaceId", rhpDoc.workspaceId || workspaceId);
+            // Send to n8n and check response for status
+            let finalStatus = "processing"; // Default status
             try {
-                await axios_1.default.post(n8nWebhookUrl, form, {
+                const n8nResponse = await axios_1.default.post(n8nWebhookUrl, form, {
                     headers: form.getHeaders(),
                     maxContentLength: Infinity,
                     maxBodyLength: Infinity,
+                    timeout: 300000, // 5 minutes timeout
                 });
+                // Check if n8n returned a status in the response
+                if (n8nResponse === null || n8nResponse === void 0 ? void 0 : n8nResponse.data) {
+                    const n8nStatus = ((_a = n8nResponse.data) === null || _a === void 0 ? void 0 : _a.status) || ((_b = n8nResponse.data) === null || _b === void 0 ? void 0 : _b.documentStatus);
+                    const normalizedStatus = (_c = n8nStatus === null || n8nStatus === void 0 ? void 0 : n8nStatus.toLowerCase()) === null || _c === void 0 ? void 0 : _c.trim();
+                    // If n8n returned a completed/ready status, update the document immediately
+                    if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
+                        rhpDoc.status = "completed";
+                        await rhpDoc.save();
+                        finalStatus = "completed";
+                        console.log(`✅ RHP Document ${rhpDoc.id} status updated to "completed" from n8n response`);
+                    }
+                    else if (normalizedStatus === "failed" || normalizedStatus === "error") {
+                        rhpDoc.status = "failed";
+                        await rhpDoc.save();
+                        finalStatus = "failed";
+                        console.log(`❌ RHP Document ${rhpDoc.id} status updated to "failed" from n8n response`);
+                    }
+                    // If status is "processing" or undefined, keep the default "processing" status
+                }
             }
             catch (n8nErr) {
                 console.error("Failed to send file to n8n:", n8nErr);
+                // Even if n8n call fails, return the document (it's already saved with "processing" status)
             }
-            // Emit upload status (processing)
+            // Emit upload status (use the actual status from n8n or default to processing)
             const jobId = rhpDoc.id;
-            index_1.io.emit("upload_status", { jobId, status: "processing" });
+            index_1.io.emit("upload_status", { jobId, status: finalStatus });
             res
                 .status(201)
                 .json({ message: "RHP uploaded and linked", document: rhpDoc });
