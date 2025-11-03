@@ -258,6 +258,7 @@ exports.reportController = {
         }
     },
     async downloadPdfFromHtml(req, res) {
+        var _a, _b, _c, _d, _e, _f, _g;
         try {
             const { id } = req.params;
             const report = await Report_1.Report.findOne({ id });
@@ -265,29 +266,73 @@ exports.reportController = {
                 return res.status(404).json({ error: "Report not found" });
             }
             // Call PDF.co API to generate PDF from HTML
-            const pdfcoResponse = await axios_1.default.post("https://api.pdf.co/v1/pdf/convert/from/html", {
-                html: report.content,
-                name: `${report.title || "report"}.pdf`,
-            }, {
-                headers: {
-                    "x-api-key": process.env.PDFCO_API_KEY,
-                    "Content-Type": "application/json",
-                },
-            });
-            if (!pdfcoResponse.data || !pdfcoResponse.data.url) {
-                throw new Error("PDF.co did not return a PDF URL");
+            try {
+                const pdfcoResponse = await axios_1.default.post("https://api.pdf.co/v1/pdf/convert/from/html", {
+                    html: report.content,
+                    name: `${report.title || "report"}.pdf`,
+                    allowAbsoluteUrls: true,
+                }, {
+                    headers: {
+                        "x-api-key": process.env.PDFCO_API_KEY,
+                        "Content-Type": "application/json",
+                    },
+                });
+                if (!pdfcoResponse.data || !pdfcoResponse.data.url) {
+                    // Check if PDF.co returned an error in the response
+                    if (((_a = pdfcoResponse.data) === null || _a === void 0 ? void 0 : _a.error) || ((_b = pdfcoResponse.data) === null || _b === void 0 ? void 0 : _b.status) === 402) {
+                        const errorMsg = ((_c = pdfcoResponse.data) === null || _c === void 0 ? void 0 : _c.message) || "PDF.co API error: Insufficient credits or service unavailable";
+                        console.error("PDF.co API error:", pdfcoResponse.data);
+                        return res.status(503).json({
+                            error: "PDF generation service temporarily unavailable",
+                            message: errorMsg,
+                            details: "The PDF generation service is currently unavailable. Please try again later or contact support."
+                        });
+                    }
+                    throw new Error("PDF.co did not return a PDF URL");
+                }
+                // Download the generated PDF and stream to client
+                const pdfStream = await axios_1.default.get(pdfcoResponse.data.url, {
+                    responseType: "stream",
+                });
+                res.setHeader("Content-Type", "application/pdf");
+                res.setHeader("Content-Disposition", `attachment; filename=\"${report.title || "report"}.pdf\"`);
+                pdfStream.data.pipe(res);
             }
-            // Download the generated PDF and stream to client
-            const pdfStream = await axios_1.default.get(pdfcoResponse.data.url, {
-                responseType: "stream",
-            });
-            res.setHeader("Content-Type", "application/pdf");
-            res.setHeader("Content-Disposition", `attachment; filename=\"${report.title || "report"}.pdf\"`);
-            pdfStream.data.pipe(res);
+            catch (pdfcoError) {
+                // Handle PDF.co specific errors
+                if (((_d = pdfcoError.response) === null || _d === void 0 ? void 0 : _d.status) === 402) {
+                    const errorData = ((_e = pdfcoError.response) === null || _e === void 0 ? void 0 : _e.data) || {};
+                    console.error("PDF.co API error (402):", errorData);
+                    return res.status(503).json({
+                        error: "PDF generation service unavailable",
+                        message: errorData.message || "Insufficient credits for PDF generation",
+                        details: "The PDF generation service requires additional credits. Please contact support or try again later."
+                    });
+                }
+                if ((_f = pdfcoError.response) === null || _f === void 0 ? void 0 : _f.status) {
+                    const errorData = ((_g = pdfcoError.response) === null || _g === void 0 ? void 0 : _g.data) || {};
+                    console.error(`PDF.co API error (${pdfcoError.response.status}):`, errorData);
+                    return res.status(503).json({
+                        error: "PDF generation service error",
+                        message: errorData.message || "PDF generation failed",
+                        details: "The PDF generation service encountered an error. Please try again later."
+                    });
+                }
+                throw pdfcoError; // Re-throw if it's not a PDF.co response error
+            }
         }
         catch (error) {
             console.error("Error generating PDF with PDF.co:", error);
-            res.status(500).json({ error: "Failed to generate PDF" });
+            // Check if response was already sent
+            if (res.headersSent) {
+                return;
+            }
+            // Return proper error response
+            res.status(500).json({
+                error: "Failed to generate PDF",
+                message: error.message || "An unexpected error occurred",
+                details: "Please try again later or contact support if the problem persists."
+            });
         }
     },
     // Admin: Get all reports across all workspaces in domain

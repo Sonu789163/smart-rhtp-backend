@@ -22,6 +22,7 @@ const directory_routes_1 = __importDefault(require("./routes/directory.routes"))
 const share_routes_1 = __importDefault(require("./routes/share.routes"));
 const notification_routes_1 = __importDefault(require("./routes/notification.routes"));
 const workspace_routes_1 = __importDefault(require("./routes/workspace.routes"));
+const workspaceRequest_routes_1 = __importDefault(require("./routes/workspaceRequest.routes"));
 const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
 const helmet_1 = __importDefault(require("helmet"));
@@ -69,7 +70,13 @@ if (!MONGODB_URI) {
     throw new Error("MONGODB_URI is not set");
 }
 mongoose_1.default
-    .connect(MONGODB_URI)
+    .connect(MONGODB_URI, {
+    serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+    socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+    connectTimeoutMS: 10000, // Give up initial connection after 10s
+    retryWrites: true,
+    retryReads: true,
+})
     .then(async () => {
     console.log("Connected to MongoDB");
     // Test SMTP connection on startup (non-blocking)
@@ -79,6 +86,16 @@ mongoose_1.default
 })
     .catch((error) => {
     console.error("MongoDB connection error:", error);
+});
+// Handle MongoDB connection errors after initial connect
+mongoose_1.default.connection.on('error', (err) => {
+    console.error('MongoDB connection error:', err);
+});
+mongoose_1.default.connection.on('disconnected', () => {
+    console.warn('MongoDB disconnected. Attempting to reconnect...');
+});
+mongoose_1.default.connection.on('reconnected', () => {
+    console.log('MongoDB reconnected');
 });
 // Routes
 app.use("/api/auth", auth_routes_1.default);
@@ -94,6 +111,7 @@ app.use("/api/directories", directory_routes_1.default);
 app.use("/api/shares", share_routes_1.default);
 app.use("/api/notifications", notification_routes_1.default);
 app.use("/api/workspaces", workspace_routes_1.default);
+app.use("/api/workspace-requests", workspaceRequest_routes_1.default);
 // Health check endpoint
 app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });

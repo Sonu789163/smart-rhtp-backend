@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -16,17 +49,22 @@ const emailService_1 = require("../services/emailService");
 // Creates an access token and a refresh token, stores the refresh
 // token in the user's document for later revocation, and returns both.
 const generateTokens = async (user) => {
+    // Get domainId from user if available
+    const userWithDomain = await User_1.User.findById(user._id).select("domainId").lean();
+    const domainId = (userWithDomain === null || userWithDomain === void 0 ? void 0 : userWithDomain.domainId) || (user.domainId);
     const accessToken = jsonwebtoken_1.default.sign({
         userId: user._id,
         email: user.email,
         role: user.role,
         domain: user.domain,
+        domainId: domainId, // Add domainId to JWT
     }, process.env.JWT_SECRET, { expiresIn: "1d" });
     const refreshToken = jsonwebtoken_1.default.sign({
         userId: user._id,
         email: user.email,
         role: user.role,
         domain: user.domain,
+        domainId: domainId, // Add domainId to JWT
     }, process.env.JWT_REFRESH_SECRET, { expiresIn: "7d" });
     // Store refresh token
     if (!user.refreshTokens) {
@@ -52,17 +90,32 @@ exports.authController = {
                 return res.status(400).json({ message: "User already exists" });
             }
             // Get the primary domain from email
-            const domain = (0, domainConfig_1.getPrimaryDomain)(email);
-            if (!domain) {
+            const domainName = (0, domainConfig_1.getPrimaryDomain)(email);
+            if (!domainName) {
                 return res.status(400).json({ message: "Invalid domain" });
             }
+            // Create or get Domain record
+            const { Domain } = await Promise.resolve().then(() => __importStar(require("../models/Domain")));
+            let domain = await Domain.findOne({ domainName, status: "active" });
+            if (!domain) {
+                // New domain - create it automatically
+                const domainId = `domain_${domainName.toLowerCase().replace(/[^a-z0-9]/g, "-")}_${Date.now()}`;
+                domain = new Domain({
+                    domainId,
+                    domainName,
+                    status: "active",
+                });
+                await domain.save();
+                console.log(`✅ Created new domain: ${domainName} (${domainId})`);
+            }
             // Check if this is the first user in the domain (will become admin)
-            const isFirstUserInDomain = (await User_1.User.countDocuments({ domain })) === 0;
+            const isFirstUserInDomain = (await User_1.User.countDocuments({ domainId: domain.domainId })) === 0;
             const role = isFirstUserInDomain ? "admin" : "user";
             const hashedPassword = await bcryptjs_1.default.hash(password, 10);
             user = new User_1.User({
                 email,
-                domain,
+                domain: domainName, // Keep for backward compatibility
+                domainId: domain.domainId, // Link to Domain schema
                 password: hashedPassword,
                 name: name || email.split("@")[0], // Use email prefix as name if not provided
                 role: role, // Make sure role is set
@@ -167,7 +220,10 @@ exports.authController = {
             if (!user || !user.refreshTokens.includes(token)) {
                 return res.status(403).json({ message: "Invalid refresh token" });
             }
-            const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
+            // Get domainId from user if available
+            const userWithDomain = await User_1.User.findById(user._id).select("domainId").lean();
+            const domainId = (userWithDomain === null || userWithDomain === void 0 ? void 0 : userWithDomain.domainId) || (user.domainId);
+            const accessToken = jsonwebtoken_1.default.sign({ userId: user._id, email: user.email, role: user.role, domain: user.domain, domainId: domainId }, process.env.JWT_SECRET, { expiresIn: "1d" });
             res.json({ accessToken });
         }
         catch (error) {

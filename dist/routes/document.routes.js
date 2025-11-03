@@ -74,5 +74,9 @@ router.get("/download/:id", documentController_1.documentController.downloadDocu
 router.put("/:id", (0, permissions_1.requireDocumentPermission)("id", "editor"), documentController_1.documentController.update);
 // Delete document
 router.delete("/:id", (0, permissions_1.requireDocumentPermission)("id", "editor"), documentController_1.documentController.delete);
+// Get available documents for comparison
+router.get("/available-for-compare/:id", (0, permissions_1.requireDocumentPermission)("id", "viewer"), documentController_1.documentController.getAvailableForCompare);
+// Link documents for comparison
+router.post("/link-for-compare", documentController_1.documentController.linkForCompare);
 // Restore route removed (trash disabled for now)
 exports.default = router;

@@ -3,20 +3,41 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.workspaceInvitationController = void 0;
 const User_1 = require("../models/User");
 const WorkspaceInvitation_1 = require("../models/WorkspaceInvitation");
+const SharePermission_1 = require("../models/SharePermission");
+const Directory_1 = require("../models/Directory");
+const Workspace_1 = require("../models/Workspace");
+const WorkspaceMembership_1 = require("../models/WorkspaceMembership");
 const emailService_1 = require("../services/emailService");
 exports.workspaceInvitationController = {
     // Send workspace invitation
     async sendInvitation(req, res) {
+        var _a;
         try {
-            const { inviteeEmail, inviteeName, invitedRole = "user", message, allowedTimeBuckets, } = req.body;
+            const { inviteeEmail, inviteeName, invitedRole = "user", message, allowedTimeBuckets, grantedDirectories, } = req.body;
             const inviterId = req.user._id;
-            const workspaceDomain = req.userDomain;
+            const workspaceId = req.currentWorkspace; // Use workspaceId from current workspace
+            const userDomain = req.userDomain || ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain);
             // Validate required fields
             if (!inviteeEmail) {
                 return res.status(400).json({ message: "Invitee email is required" });
             }
-            // Check if inviter is admin of the workspace
-            if (req.user.role !== "admin") {
+            if (!workspaceId) {
+                return res.status(400).json({ message: "Workspace is required. Please select a workspace." });
+            }
+            // Get workspace to verify it exists and get name
+            const workspace = await Workspace_1.Workspace.findOne({ workspaceId, domain: userDomain });
+            if (!workspace) {
+                return res.status(404).json({ message: "Workspace not found" });
+            }
+            // Check if inviter is admin (domain admin or workspace admin via membership)
+            const isDomainAdmin = req.user.role === "admin";
+            const membership = await WorkspaceMembership_1.WorkspaceMembership.findOne({
+                userId: req.user._id,
+                workspaceId,
+                role: "admin",
+                status: "active",
+            });
+            if (!isDomainAdmin && !membership) {
                 return res.status(403).json({
                     message: "Only workspace admins can send invitations",
                 });
@@ -27,11 +48,15 @@ exports.workspaceInvitationController = {
                     message: "You cannot invite yourself",
                 });
             }
-            // Check if user already exists and has access to this workspace
+            // Check if user already exists and has access to this workspace via membership
             const existingUser = await User_1.User.findOne({ email: inviteeEmail });
             if (existingUser) {
-                const hasAccess = existingUser.accessibleWorkspaces.some((ws) => ws.workspaceDomain === workspaceDomain && ws.isActive);
-                if (hasAccess) {
+                const existingMembership = await WorkspaceMembership_1.WorkspaceMembership.findOne({
+                    userId: existingUser._id,
+                    workspaceId,
+                    status: "active",
+                });
+                if (existingMembership) {
                     return res.status(400).json({
                         message: "User already has access to this workspace",
                     });
@@ -40,7 +65,7 @@ exports.workspaceInvitationController = {
             // Check for existing pending invitation
             const existingInvitation = await WorkspaceInvitation_1.WorkspaceInvitation.findOne({
                 inviteeEmail: inviteeEmail.toLowerCase(),
-                workspaceDomain,
+                workspaceId,
                 status: "pending",
             });
             if (existingInvitation) {
@@ -61,15 +86,20 @@ exports.workspaceInvitationController = {
                 inviterName: req.user.name,
                 inviteeEmail: inviteeEmail.toLowerCase(),
                 inviteeName: inviteeName || inviteeEmail.split("@")[0],
-                workspaceDomain,
-                workspaceName: `${workspaceDomain} Workspace`, // You can customize this
-                invitedRole,
+                workspaceId, // Use workspaceId
+                workspaceDomain: userDomain, // Store actual domain for backward compatibility
+                workspaceName: workspace.name, // Use actual workspace name
+                invitedRole: invitedRole, // Use invitedRole as-is (user/viewer/editor)
                 message,
                 expiresAt,
-                // Persist desired time-bucket permissions on invitation
+                // Persist desired time-bucket permissions on invitation (deprecated but kept for compatibility)
                 allowedTimeBuckets: Array.isArray(allowedTimeBuckets) && allowedTimeBuckets.length
                     ? allowedTimeBuckets
-                    : ["today"],
+                    : ["all"],
+                // Store directory access granted with this invitation
+                grantedDirectories: Array.isArray(grantedDirectories)
+                    ? grantedDirectories
+                    : [],
             });
             await invitation.save();
             // Send invitation email
@@ -141,7 +171,7 @@ exports.workspaceInvitationController = {
     },
     // Accept invitation
     async acceptInvitation(req, res) {
-        var _a, _b;
+        var _a;
         try {
             const { invitationId } = req.params;
             const userId = req.user._id;
@@ -170,47 +200,97 @@ exports.workspaceInvitationController = {
                     message: "Invitation has expired",
                 });
             }
-            // Add workspace access to user
+            // Add workspace access via WorkspaceMembership
             const user = await User_1.User.findById(userId);
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }
-            // Check if user already has access (case-insensitive domain check)
-            const hasAccess = user.accessibleWorkspaces.some((ws) => (ws.workspaceDomain || "").toLowerCase() ===
-                (invitation.workspaceDomain || "").toLowerCase() && ws.isActive);
-            if (hasAccess) {
+            // Check if user already has membership
+            const existingMembership = await WorkspaceMembership_1.WorkspaceMembership.findOne({
+                userId: user._id,
+                workspaceId: invitation.workspaceId,
+                status: "active",
+            });
+            if (existingMembership) {
                 return res.status(400).json({
                     message: "You already have access to this workspace",
                 });
             }
-            // Add workspace access
-            user.accessibleWorkspaces.push({
-                workspaceDomain: invitation.workspaceDomain,
-                workspaceName: invitation.workspaceName,
-                role: invitation.invitedRole,
-                allowedTimeBuckets: ((_b = invitation.allowedTimeBuckets) === null || _b === void 0 ? void 0 : _b.length)
-                    ? invitation.allowedTimeBuckets
-                    : ["today"],
-                extraDocumentIds: [],
-                blockedDocumentIds: [],
+            // Create workspace membership
+            // Map invitation role to membership role (invitedRole is user/viewer/editor, membership uses member/viewer/admin)
+            let membershipRole = "member";
+            if (invitation.invitedRole === "viewer") {
+                membershipRole = "viewer";
+            }
+            else if (invitation.invitedRole === "editor") {
+                membershipRole = "member"; // Editor maps to member in membership
+            }
+            const membership = new WorkspaceMembership_1.WorkspaceMembership({
+                userId: user._id,
+                workspaceId: invitation.workspaceId,
+                role: membershipRole,
                 invitedBy: invitation.inviterId,
                 joinedAt: new Date(),
-                isActive: true,
+                status: "active",
             });
-            // De-duplicate any accidental duplicates by domain
-            const seen = {};
-            user.accessibleWorkspaces = user.accessibleWorkspaces.filter((ws) => {
-                const key = (ws.workspaceDomain || "").toLowerCase();
-                if (seen[key])
-                    return false;
-                seen[key] = true;
-                return true;
-            });
-            // Set as current workspace if it's the first one
-            if (user.accessibleWorkspaces.length === 1) {
-                user.currentWorkspace = invitation.workspaceDomain;
+            await membership.save();
+            // Set as current workspace if user doesn't have one
+            if (!user.currentWorkspace) {
+                user.currentWorkspace = invitation.workspaceId;
+                await user.save();
             }
-            await user.save();
+            // Auto-grant directory access if directories were specified in invitation
+            if (invitation.grantedDirectories &&
+                Array.isArray(invitation.grantedDirectories) &&
+                invitation.grantedDirectories.length > 0) {
+                // Get the inviter's actual domain (not workspace slug)
+                const inviter = await User_1.User.findById(invitation.inviterId);
+                if (!inviter) {
+                    console.error("Inviter not found for invitation:", invitation.invitationId);
+                    // Continue without directory access if inviter not found
+                }
+                else {
+                    const actualDomain = inviter.domain; // Use inviter's actual domain (e.g., "excollo.com")
+                    const userIdString = userId.toString();
+                    for (const dirAccess of invitation.grantedDirectories) {
+                        // Check if directory exists - directories use actual domain, not workspace slug
+                        const directory = await Directory_1.Directory.findOne({
+                            id: dirAccess.directoryId,
+                            domain: actualDomain,
+                        });
+                        if (directory) {
+                            // Check if share already exists to avoid duplicates
+                            const existingShare = await SharePermission_1.SharePermission.findOne({
+                                domain: actualDomain,
+                                resourceType: "directory",
+                                resourceId: dirAccess.directoryId,
+                                scope: "user",
+                                principalId: userIdString,
+                            });
+                            if (!existingShare) {
+                                // Generate share ID
+                                const shareId = `shr_${Date.now()}_${Math.random()
+                                    .toString(36)
+                                    .substr(2, 9)}`;
+                                // Create user-scoped share permission
+                                // Use actual domain, not workspace slug
+                                const share = new SharePermission_1.SharePermission({
+                                    id: shareId,
+                                    resourceType: "directory",
+                                    resourceId: dirAccess.directoryId,
+                                    domain: actualDomain, // Use actual domain (e.g., "excollo.com"), not workspace slug
+                                    scope: "user",
+                                    principalId: userIdString,
+                                    role: dirAccess.role,
+                                    invitedEmail: invitation.inviteeEmail,
+                                    createdBy: invitation.inviterId.toString(),
+                                });
+                                await share.save();
+                            }
+                        }
+                    }
+                }
+            }
             // Update invitation status
             invitation.status = "accepted";
             invitation.acceptedAt = new Date();
@@ -218,9 +298,9 @@ exports.workspaceInvitationController = {
             res.json({
                 message: "Invitation accepted successfully",
                 workspace: {
-                    domain: invitation.workspaceDomain,
+                    workspaceId: invitation.workspaceId,
                     name: invitation.workspaceName,
-                    role: invitation.invitedRole,
+                    role: membership.role,
                 },
             });
         }
@@ -312,12 +392,58 @@ exports.workspaceInvitationController = {
     // Get user's accessible workspaces
     async getUserWorkspaces(req, res) {
         try {
-            const user = await User_1.User.findById(req.user._id).select("accessibleWorkspaces currentWorkspace");
+            const user = await User_1.User.findById(req.user._id).select("currentWorkspace");
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }
+            // Get workspaces via membership
+            const memberships = await WorkspaceMembership_1.WorkspaceMembership.find({
+                userId: user._id,
+                status: "active",
+            });
+            const workspaceIds = memberships.map((m) => m.workspaceId);
+            const workspaces = await Workspace_1.Workspace.find({
+                workspaceId: { $in: workspaceIds },
+                status: "active",
+            });
+            // Also get legacy accessibleWorkspaces for backward compatibility
+            const legacyWorkspaces = (user.accessibleWorkspaces || []).filter((ws) => ws.isActive !== false);
+            // Get workspaces from legacy system that aren't in membership yet
+            const legacyWorkspaceSlugs = legacyWorkspaces.map((ws) => ws.workspaceDomain);
+            const legacyWorkspacesFromDB = await Workspace_1.Workspace.find({
+                domain: user.domain,
+                slug: { $in: legacyWorkspaceSlugs },
+                status: "active",
+            });
+            // Combine membership-based and legacy workspaces, deduplicate
+            const allWorkspacesMap = new Map();
+            // Add membership-based workspaces
+            workspaces.forEach((ws) => {
+                const membership = memberships.find((m) => m.workspaceId === ws.workspaceId);
+                allWorkspacesMap.set(ws.workspaceId, {
+                    workspaceDomain: ws.workspaceId,
+                    workspaceName: ws.name,
+                    role: (membership === null || membership === void 0 ? void 0 : membership.role) || "member",
+                    isActive: true,
+                });
+            });
+            // Add legacy workspaces not yet in membership
+            legacyWorkspaces.forEach((legacyWs) => {
+                const legacyWsFromDB = legacyWorkspacesFromDB.find((ws) => ws.slug.toLowerCase() === (legacyWs.workspaceDomain || "").toLowerCase());
+                // If found in DB, use workspaceId; otherwise use legacy slug (for backward compatibility)
+                const wsId = (legacyWsFromDB === null || legacyWsFromDB === void 0 ? void 0 : legacyWsFromDB.workspaceId) || legacyWs.workspaceDomain;
+                if (!allWorkspacesMap.has(wsId)) {
+                    allWorkspacesMap.set(wsId, {
+                        workspaceDomain: wsId,
+                        workspaceName: legacyWs.workspaceName || legacyWs.workspaceDomain,
+                        role: legacyWs.role || "member",
+                        isActive: true,
+                    });
+                }
+            });
+            const workspacesWithRole = Array.from(allWorkspacesMap.values());
             res.json({
-                workspaces: user.accessibleWorkspaces.filter((ws) => ws.isActive),
+                workspaces: workspacesWithRole,
                 currentWorkspace: user.currentWorkspace,
             });
         }
@@ -329,18 +455,30 @@ exports.workspaceInvitationController = {
     // Switch workspace
     async switchWorkspace(req, res) {
         try {
-            const { workspaceDomain } = req.body;
+            const { workspaceDomain } = req.body; // This is actually workspaceId now
             const userId = req.user._id;
             const user = await User_1.User.findById(userId);
             if (!user) {
                 return res.status(404).json({ message: "User not found" });
             }
-            // Check if user has access to this workspace
-            const hasAccess = user.accessibleWorkspaces.some((ws) => ws.workspaceDomain === workspaceDomain && ws.isActive);
-            if (!hasAccess) {
+            // Check if user has membership in this workspace
+            const membership = await WorkspaceMembership_1.WorkspaceMembership.findOne({
+                userId: user._id,
+                workspaceId: workspaceDomain, // workspaceDomain is actually workspaceId
+                status: "active",
+            });
+            if (!membership) {
                 return res.status(403).json({
                     message: "You don't have access to this workspace",
                 });
+            }
+            // Verify workspace exists
+            const workspace = await Workspace_1.Workspace.findOne({
+                workspaceId: workspaceDomain,
+                status: "active",
+            });
+            if (!workspace) {
+                return res.status(404).json({ message: "Workspace not found" });
             }
             user.currentWorkspace = workspaceDomain;
             await user.save();
@@ -463,6 +601,195 @@ exports.workspaceInvitationController = {
         catch (error) {
             console.error("Error revoking user access:", error);
             return res.status(500).json({ message: "Failed to revoke access" });
+        }
+    },
+    // Admin: grant directory access to a user
+    async grantDirectoryAccess(req, res) {
+        var _a;
+        try {
+            if (req.user.role !== "admin") {
+                return res
+                    .status(403)
+                    .json({ message: "Only admins can grant directory access" });
+            }
+            const { userEmail, directoryIds, role } = req.body;
+            if (!userEmail || !Array.isArray(directoryIds) || directoryIds.length === 0 || !role) {
+                return res.status(400).json({
+                    message: "userEmail, directoryIds array, and role are required",
+                });
+            }
+            const user = await User_1.User.findOne({ email: userEmail.toLowerCase() });
+            if (!user)
+                return res.status(404).json({ message: "User not found" });
+            // Verify user is in the workspace
+            const workspaceDomain = req.userDomain;
+            const hasWorkspaceAccess = user.accessibleWorkspaces.some((ws) => (ws.workspaceDomain || "").toLowerCase() ===
+                (workspaceDomain || "").toLowerCase() && ws.isActive);
+            if (!hasWorkspaceAccess) {
+                return res
+                    .status(400)
+                    .json({ message: "User does not have access to this workspace" });
+            }
+            // Use actual user domain (not workspace slug)
+            // workspaceDomain might be slug, but SharePermission uses actual domain
+            const domain = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain) || workspaceDomain;
+            const userIdString = user._id.toString();
+            const granted = [];
+            const errors = [];
+            for (const directoryId of directoryIds) {
+                try {
+                    // Verify directory exists
+                    const directory = await Directory_1.Directory.findOne({
+                        id: directoryId,
+                        domain,
+                    });
+                    if (!directory) {
+                        errors.push(`Directory ${directoryId} not found`);
+                        continue;
+                    }
+                    // Check if share already exists
+                    const existingShare = await SharePermission_1.SharePermission.findOne({
+                        domain,
+                        resourceType: "directory",
+                        resourceId: directoryId,
+                        scope: "user",
+                        principalId: userIdString,
+                    });
+                    if (existingShare) {
+                        // Update existing share role
+                        existingShare.role = role;
+                        await existingShare.save();
+                        granted.push(directoryId);
+                    }
+                    else {
+                        // Create new share
+                        const shareId = `shr_${Date.now()}_${Math.random()
+                            .toString(36)
+                            .substr(2, 9)}`;
+                        const share = new SharePermission_1.SharePermission({
+                            id: shareId,
+                            resourceType: "directory",
+                            resourceId: directoryId,
+                            domain,
+                            scope: "user",
+                            principalId: userIdString,
+                            role,
+                            invitedEmail: userEmail.toLowerCase(),
+                            createdBy: req.user._id.toString(),
+                        });
+                        await share.save();
+                        granted.push(directoryId);
+                    }
+                }
+                catch (error) {
+                    errors.push(`Failed to grant access to ${directoryId}: ${error.message}`);
+                }
+            }
+            return res.json({
+                message: "Directory access granted",
+                granted,
+                errors: errors.length > 0 ? errors : undefined,
+            });
+        }
+        catch (error) {
+            console.error("Error granting directory access:", error);
+            return res
+                .status(500)
+                .json({ message: "Failed to grant directory access" });
+        }
+    },
+    // Admin: revoke directory access from a user
+    async revokeDirectoryAccess(req, res) {
+        var _a;
+        try {
+            if (req.user.role !== "admin") {
+                return res
+                    .status(403)
+                    .json({ message: "Only admins can revoke directory access" });
+            }
+            const { userEmail, directoryId } = req.body;
+            if (!userEmail || !directoryId) {
+                return res
+                    .status(400)
+                    .json({ message: "userEmail and directoryId are required" });
+            }
+            const user = await User_1.User.findOne({ email: userEmail.toLowerCase() });
+            if (!user)
+                return res.status(404).json({ message: "User not found" });
+            // Use actual user domain (not workspace slug)
+            // req.userDomain might be workspace slug, but SharePermission uses actual domain
+            const domain = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain) || req.userDomain;
+            const userIdString = user._id.toString();
+            const share = await SharePermission_1.SharePermission.findOne({
+                domain,
+                resourceType: "directory",
+                resourceId: directoryId,
+                scope: "user",
+                principalId: userIdString,
+            });
+            if (!share) {
+                return res.status(404).json({
+                    message: "Directory access not found",
+                });
+            }
+            await SharePermission_1.SharePermission.deleteOne({ _id: share._id });
+            return res.json({ message: "Directory access revoked" });
+        }
+        catch (error) {
+            console.error("Error revoking directory access:", error);
+            return res
+                .status(500)
+                .json({ message: "Failed to revoke directory access" });
+        }
+    },
+    // Admin: get all directories a user has access to
+    async getUserDirectories(req, res) {
+        var _a;
+        try {
+            if (req.user.role !== "admin") {
+                return res
+                    .status(403)
+                    .json({ message: "Only admins can view user directory access" });
+            }
+            const { userEmail } = req.params;
+            if (!userEmail) {
+                return res.status(400).json({ message: "userEmail is required" });
+            }
+            const user = await User_1.User.findOne({ email: userEmail.toLowerCase() });
+            if (!user)
+                return res.status(404).json({ message: "User not found" });
+            // Use actual user domain (not workspace slug)
+            // req.userDomain might be workspace slug, but SharePermission uses actual domain
+            const domain = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain) || req.userDomain;
+            const userIdString = user._id.toString();
+            // Get all user-scoped shares for this user in this workspace
+            const shares = await SharePermission_1.SharePermission.find({
+                domain,
+                resourceType: "directory",
+                scope: "user",
+                principalId: userIdString,
+            });
+            // Get directory details for each share
+            const directoriesWithAccess = await Promise.all(shares.map(async (share) => {
+                const directory = await Directory_1.Directory.findOne({
+                    id: share.resourceId,
+                    domain,
+                });
+                return {
+                    directoryId: share.resourceId,
+                    directoryName: (directory === null || directory === void 0 ? void 0 : directory.name) || "Unknown",
+                    role: share.role,
+                    shareId: share.id,
+                    createdAt: share.createdAt,
+                };
+            }));
+            return res.json({ directories: directoriesWithAccess });
+        }
+        catch (error) {
+            console.error("Error fetching user directories:", error);
+            return res
+                .status(500)
+                .json({ message: "Failed to fetch user directories" });
         }
     },
 };

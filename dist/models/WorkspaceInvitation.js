@@ -20,7 +20,8 @@ const workspaceInvitationSchema = new mongoose_1.default.Schema({
     inviteeEmail: { type: String, required: true, index: true },
     inviteeName: { type: String },
     // Workspace details
-    workspaceDomain: { type: String, required: true, index: true },
+    workspaceDomain: { type: String, required: true, index: true }, // Keep for backward compatibility
+    workspaceId: { type: String, required: true, index: true }, // Link to Workspace.workspaceId
     workspaceName: { type: String, required: true },
     // Invitation status
     status: {
@@ -34,6 +35,26 @@ const workspaceInvitationSchema = new mongoose_1.default.Schema({
         type: String,
         enum: ["user", "viewer", "editor"],
         default: "user",
+    },
+    // Directory access permissions (for cross-domain invitations)
+    grantedDirectories: {
+        type: [
+            {
+                directoryId: { type: String, required: true },
+                directoryName: { type: String },
+                role: {
+                    type: String,
+                    enum: ["viewer", "editor"],
+                    default: "viewer",
+                },
+                permissions: {
+                    type: [String],
+                    enum: ["read", "write", "delete"],
+                    default: ["read"],
+                },
+            },
+        ],
+        default: [],
     },
     // Requested time-bucket permissions for this invite
     allowedTimeBuckets: {
@@ -62,6 +83,7 @@ const workspaceInvitationSchema = new mongoose_1.default.Schema({
 // Indexes for efficient queries
 workspaceInvitationSchema.index({ inviteeEmail: 1, status: 1 });
 workspaceInvitationSchema.index({ workspaceDomain: 1, status: 1 });
+workspaceInvitationSchema.index({ workspaceId: 1, status: 1 }); // Index for workspaceId queries
 workspaceInvitationSchema.index({ inviterId: 1, status: 1 });
 workspaceInvitationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // Auto-delete expired invitations
 // Pre-save middleware to update updatedAt

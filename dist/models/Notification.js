@@ -10,7 +10,9 @@ const mongoose_1 = __importDefault(require("mongoose"));
 const notificationSchema = new mongoose_1.default.Schema({
     id: { type: String, required: true, unique: true },
     userId: { type: String, required: true, index: true },
-    domain: { type: String, required: true, index: true },
+    domain: { type: String, required: true, index: true }, // Backward compatibility
+    domainId: { type: String, required: true, index: true }, // Link to Domain schema
+    workspaceId: { type: String, index: true }, // Optional: Link to Workspace if applicable
     type: { type: String, required: true },
     title: { type: String, required: true },
     body: { type: String },

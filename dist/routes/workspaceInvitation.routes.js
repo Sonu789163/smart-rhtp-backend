@@ -38,4 +38,10 @@ router.post("/user/update-workspace-name", workspaceInvitationController_1.works
 router.post("/workspace/update-user-buckets", workspaceInvitationController_1.workspaceInvitationController.updateUserTimeBuckets);
 // Admin: revoke user's access to current workspace
 router.post("/workspace/revoke-user-access", workspaceInvitationController_1.workspaceInvitationController.revokeUserAccess);
+// Admin: grant directory access to a user
+router.post("/workspace/users/directories/grant", workspaceInvitationController_1.workspaceInvitationController.grantDirectoryAccess);
+// Admin: revoke directory access from a user
+router.post("/workspace/users/directories/revoke", workspaceInvitationController_1.workspaceInvitationController.revokeDirectoryAccess);
+// Admin: get all directories a user has access to
+router.get("/workspace/users/:userEmail/directories", workspaceInvitationController_1.workspaceInvitationController.getUserDirectories);
 exports.default = router;
