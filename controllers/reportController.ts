@@ -1,7 +1,8 @@
 import { Request, Response } from "express";
 import { Report } from "../models/Report";
-import { User } from "../models/User";
 import { Document } from "../models/Document";
+import { Domain } from "../models/Domain";
+import { User } from "../models/User";
 import axios from "axios";
 import { io } from "../index";
 import { publishEvent } from "../lib/events";
@@ -89,53 +90,62 @@ export const reportController = {
       // Get current workspace from request
       const currentWorkspace = req.currentWorkspace || req.userDomain;
 
-      // Get domainId - try from user first, then from document as fallback
-      let domainId: string | undefined;
-      
-      // Try to get from user
-      if (req.user?._id) {
-        const userWithDomain = await User.findById(req.user._id).select("domainId");
-        if (userWithDomain?.domainId) {
-          domainId = userWithDomain.domainId;
-        }
-      }
-      
-      // Fallback: Get domainId from DRHP document if user domainId not available
-      if (!domainId && drhpId) {
-        try {
-          const drhpDoc = await Document.findOne({ id: drhpId }).select("domainId");
-          if (drhpDoc?.domainId) {
-            domainId = drhpDoc.domainId;
-            console.log(`Retrieved domainId from DRHP document: ${domainId}`);
-          }
-        } catch (docError) {
-          console.warn("Could not fetch DRHP document to get domainId:", docError);
-        }
-      }
-      
-      // Fallback: Get domainId from RHP document if still not available
-      if (!domainId && rhpId) {
-        try {
-          const rhpDoc = await Document.findOne({ id: rhpId }).select("domainId");
-          if (rhpDoc?.domainId) {
-            domainId = rhpDoc.domainId;
-            console.log(`Retrieved domainId from RHP document: ${domainId}`);
-          }
-        } catch (docError) {
-          console.warn("Could not fetch RHP document to get domainId:", docError);
-        }
-      }
-      
+      // Resolve domainId - can come from request body, user, or document
+      let domainId: string | undefined = req.body.domainId;
+      let domain: string | undefined = req.body.domain || req.userDomain;
+
+      // If domainId not in request body, try to get it
       if (!domainId) {
-        return res.status(400).json({ 
-          error: "domainId not found. Please contact administrator.",
-          message: "Failed to create report - missing domainId. Could not retrieve from user or documents."
+        // Try from domain name if we have it
+        if (domain) {
+          try {
+            const domainRecord = await Domain.findOne({ domainName: domain, status: "active" });
+            if (domainRecord) {
+              domainId = domainRecord.domainId;
+            }
+          } catch (error) {
+            console.error("Error fetching domainId from Domain:", error);
+          }
+        }
+
+        // Fallback: get from DRHP document
+        if (!domainId && drhpId) {
+          try {
+            const drhpDoc = await Document.findOne({ id: drhpId });
+            if (drhpDoc && (drhpDoc as any).domainId) {
+              domainId = (drhpDoc as any).domainId;
+              if (!domain) domain = drhpDoc.domain;
+            }
+          } catch (error) {
+            console.error("Error fetching domainId from document:", error);
+          }
+        }
+
+        // Fallback: get from user if available
+        if (!domainId && req.user?._id) {
+          try {
+            const user = await User.findById(req.user._id).select("domainId domain");
+            if (user && (user as any).domainId) {
+              domainId = (user as any).domainId;
+              if (!domain) domain = user.domain;
+            }
+          } catch (error) {
+            console.error("Error fetching domainId from user:", error);
+          }
+        }
+      }
+
+      // If still no domainId, we cannot proceed
+      if (!domainId || !domain) {
+        return res.status(400).json({
+          error: "domainId and domain are required",
+          message: "Unable to determine domainId. Please ensure domainId is provided in request body or linked to the documents.",
         });
       }
 
       // Ensure one report per DRHP/RHP pair in the workspace: replace previous if exists
       await Report.deleteMany({
-        domain: req.userDomain,
+        domain: domain,
         workspaceId: currentWorkspace,
         drhpNamespace,
         rhpNamespace,
@@ -149,7 +159,7 @@ export const reportController = {
         rhpId,
         drhpNamespace,
         rhpNamespace,
-        domain: req.userDomain, // Add domain for workspace isolation - backward compatibility
+        domain: domain, // Add domain for workspace isolation
         domainId: domainId, // Link to Domain schema - REQUIRED
         workspaceId: currentWorkspace, // Add workspace for team isolation
         updatedAt: new Date(),
