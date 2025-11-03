@@ -154,7 +154,7 @@ export const directoryController = {
       // Use actual user domain when querying directories (not workspace slug)
       // Directories are stored with actual domain, not workspace slug
       const actualDomain = req.user?.domain || req.userDomain;
-      
+
       const filter: any = {
         domain: actualDomain, // Use actual domain, not workspace slug
         workspaceId: currentWorkspace,
