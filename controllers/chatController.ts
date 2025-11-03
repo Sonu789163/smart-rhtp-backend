@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { Chat } from "../models/Chat";
 import { Document } from "../models/Document";
+import { User } from "../models/User";
 import { io } from "../index";
 
 interface AuthRequest extends Request {
@@ -81,8 +82,15 @@ export const chatController = {
         return res.status(404).json({ error: "Document not found" });
       }
 
-      // Add domain and workspace to chat data
+      // Get user's domainId
+      const userWithDomain = await User.findById(user._id).select("domainId");
+      if (!userWithDomain?.domainId) {
+        return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
+      }
+
+      // Add domain, domainId, and workspace to chat data
       chatData.domain = req.userDomain;
+      chatData.domainId = userWithDomain.domainId; // Link to Domain schema
       chatData.workspaceId = currentWorkspace;
 
       if (user.microsoftId) {
