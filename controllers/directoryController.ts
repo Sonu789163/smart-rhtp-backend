@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import { Directory } from "../models/Directory";
+import { User } from "../models/User";
 import { Document } from "../models/Document";
+import { SharePermission } from "../models/SharePermission";
 import { publishEvent } from "../lib/events";
 
 interface AuthRequest extends Request {
@@ -14,7 +16,11 @@ export const directoryController = {
     try {
       const { newParentId } = req.body || {};
       // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
 
       const dir = await Directory.findOne({
         id: req.params.id,
@@ -57,13 +63,28 @@ export const directoryController = {
         return res.status(400).json({ error: "Name is required" });
       }
       // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
+      
+      // Always use user's actual domain (not workspace slug)
+      // req.userDomain might be workspace slug, but we need the actual user domain
+      const actualDomain = req.user?.domain || req.userDomain;
+
+      // Get user's domainId
+      const userWithDomain = await User.findById(req.user?._id).select("domainId");
+      if (!userWithDomain?.domainId) {
+        return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
+      }
 
       const payload: any = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         name: String(name).trim(),
         parentId: parentId === "root" || !parentId ? null : parentId,
-        domain: req.userDomain,
+        domain: actualDomain, // Use actual user domain, not workspace slug - backward compatibility
+        domainId: userWithDomain.domainId, // Link to Domain schema
         workspaceId: currentWorkspace,
         ownerUserId: req.user?._id?.toString?.(),
       };
@@ -92,7 +113,11 @@ export const directoryController = {
   async getById(req: AuthRequest, res: Response) {
     try {
       // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
 
       const dir = await Directory.findOne({
         id: req.params.id,
@@ -120,18 +145,71 @@ export const directoryController = {
         order?: string;
       };
       // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
 
+      // Use actual user domain when querying directories (not workspace slug)
+      // Directories are stored with actual domain, not workspace slug
+      const actualDomain = req.user?.domain || req.userDomain;
+      
       const filter: any = {
-        domain: req.userDomain,
+        domain: actualDomain, // Use actual domain, not workspace slug
         workspaceId: currentWorkspace,
         parentId,
       };
-      const dirs = await Directory.find(filter).sort({ name: 1 });
+      const allDirs = await Directory.find(filter).sort({ name: 1 });
+
+      // Filter directories by user permissions (only show directories user has access to)
+      const userId = req.user?._id?.toString();
+      // Use actual user domain, not workspace slug (req.userDomain might be slug)
+      const domain = req.user?.domain || req.userDomain;
+
+      const visibleDirs = await Promise.all(
+        allDirs.map(async (dir) => {
+          // Admins can see all directories
+          if (req.user?.role === "admin") return dir;
+
+          // Directory owners can see their own directories
+          if (dir.ownerUserId === userId) return dir;
+
+          // Check user-scoped share permission
+          if (userId) {
+            const userShare = await SharePermission.findOne({
+              domain,
+              resourceType: "directory",
+              resourceId: dir.id,
+              scope: "user",
+              principalId: userId,
+            });
+            if (userShare) return dir;
+          }
+
+          // Check workspace-scoped share permission
+          const wsShare = await SharePermission.findOne({
+            domain,
+            resourceType: "directory",
+            resourceId: dir.id,
+            scope: "workspace",
+            principalId: currentWorkspace,
+          });
+          if (wsShare) return dir;
+
+          // No permission - don't show this directory
+          return null;
+        })
+      );
+
+      // Filter out null values (directories without permission)
+      const dirs = visibleDirs.filter((d): d is typeof allDirs[0] => d !== null);
 
       // Documents under this directory
+      // Use actual domain when querying documents (not workspace slug)
+      const actualDomainForDocs = req.user?.domain || req.userDomain;
       const docFilter: any = {
-        domain: req.userDomain,
+        domain: actualDomainForDocs, // Use actual domain, not workspace slug
         workspaceId: currentWorkspace,
       };
       docFilter.directoryId = parentId;
@@ -140,7 +218,58 @@ export const directoryController = {
       const sortKey = sort === "uploadedAt" ? "uploadedAt" : "name";
       const sortDir = (order || "asc").toLowerCase() === "desc" ? -1 : 1;
 
-      const docs = await Document.find(docFilter).sort({ [sortKey]: sortDir });
+      const allDocs = await Document.find(docFilter).sort({ [sortKey]: sortDir });
+
+      // Filter documents based on directory access permissions
+      // Only show documents from directories the user has access to
+      let docs = allDocs;
+      if (req.user?.role !== "admin") {
+        // Check access for each document's directory
+        const accessibleDocs = await Promise.all(
+          allDocs.map(async (doc) => {
+            const docDirId = doc.directoryId || null;
+
+            // Root directory - allow access
+            if (!docDirId) return doc;
+
+            // Check if directory is in the visible directories list (already filtered)
+            const hasDirAccess = dirs.some((d) => d.id === docDirId);
+            if (hasDirAccess) return doc;
+
+            // Also check if user owns the directory or has explicit share
+            const directory = dirs.find((d) => d.id === docDirId);
+            if (directory?.ownerUserId === userId) return doc;
+
+            // Use actual user domain when checking SharePermission (not workspace slug)
+            const actualDomain = req.user?.domain || req.userDomain;
+            
+            if (userId) {
+              const userShare = await SharePermission.findOne({
+                domain: actualDomain,
+                resourceType: "directory",
+                resourceId: docDirId,
+                scope: "user",
+                principalId: userId,
+              });
+              if (userShare) return doc;
+            }
+
+            const wsShare = await SharePermission.findOne({
+              domain: actualDomain,
+              resourceType: "directory",
+              resourceId: docDirId,
+              scope: "workspace",
+              principalId: currentWorkspace,
+            });
+            if (wsShare) return doc;
+
+            // No access
+            return null;
+          })
+        );
+
+        docs = accessibleDocs.filter((d): d is typeof allDocs[0] => d !== null);
+      }
 
       // Merge and paginate
       const merged = [
@@ -167,7 +296,11 @@ export const directoryController = {
     try {
       const { name, parentId } = req.body || {};
       // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
 
       const dir = await Directory.findOne({
         id: req.params.id,
@@ -211,7 +344,11 @@ export const directoryController = {
   async delete(req: AuthRequest, res: Response) {
     try {
       // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
 
       const dir = await Directory.findOne({
         id: req.params.id,

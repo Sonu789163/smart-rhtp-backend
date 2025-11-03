@@ -75,4 +75,22 @@ router.post(
   workspaceInvitationController.revokeUserAccess
 );
 
+// Admin: grant directory access to a user
+router.post(
+  "/workspace/users/directories/grant",
+  workspaceInvitationController.grantDirectoryAccess
+);
+
+// Admin: revoke directory access from a user
+router.post(
+  "/workspace/users/directories/revoke",
+  workspaceInvitationController.revokeDirectoryAccess
+);
+
+// Admin: get all directories a user has access to
+router.get(
+  "/workspace/users/:userEmail/directories",
+  workspaceInvitationController.getUserDirectories
+);
+
 export default router;

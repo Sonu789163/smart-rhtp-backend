@@ -12,7 +12,8 @@ const documentSchema = new mongoose.Schema({
   type: { type: String, enum: ["DRHP", "RHP"], required: true }, // distinguish between DRHP and RHP
   relatedDrhpId: { type: String }, // for RHP to link to DRHP (using string IDs)
   relatedRhpId: { type: String }, // for DRHP to link to RHP (using string IDs)
-  domain: { type: String, required: true, index: true }, // Domain isolation (company level)
+  domain: { type: String, required: true, index: true }, // Domain isolation (company level) - backward compatibility
+  domainId: { type: String, required: true, index: true }, // Link to Domain schema
   workspaceId: { type: String, required: true, index: true }, // Workspace isolation (team level)
   microsoftId: { type: String }, // Optional: for tracking who created it
   userId: { type: String }, // Optional: for tracking who created it

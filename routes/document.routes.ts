@@ -99,6 +99,12 @@ router.put("/:id", requireDocumentPermission("id", "editor"), documentController
 // Delete document
 router.delete("/:id", requireDocumentPermission("id", "editor"), documentController.delete);
 
+// Get available documents for comparison
+router.get("/available-for-compare/:id", requireDocumentPermission("id", "viewer"), documentController.getAvailableForCompare);
+
+// Link documents for comparison
+router.post("/link-for-compare", documentController.linkForCompare);
+
 // Restore route removed (trash disabled for now)
 
 export default router;

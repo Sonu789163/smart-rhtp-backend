@@ -6,7 +6,8 @@ const userSchema = new mongoose.Schema({
   microsoftId: { type: String, unique: true, sparse: true },
   name: { type: String },
   email: { type: String, required: true, unique: true },
-  domain: { type: String, required: true, index: true }, // Primary domain
+  domain: { type: String, required: true, index: true }, // Primary domain (for backward compatibility)
+  domainId: { type: String, required: true, index: true }, // Link to Domain schema
   password: { type: String }, // Optional: only for email/password users
   role: { type: String, enum: ["admin", "user"], default: "user", index: true },
   status: {

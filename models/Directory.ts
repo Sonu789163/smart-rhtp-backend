@@ -4,7 +4,8 @@ const directorySchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
   name: { type: String, required: true },
   parentId: { type: String, default: null },
-  domain: { type: String, required: true, index: true }, // Domain isolation (company level)
+  domain: { type: String, required: true, index: true }, // Domain isolation (company level) - backward compatibility
+  domainId: { type: String, required: true, index: true }, // Link to Domain schema
   workspaceId: { type: String, required: true, index: true }, // Workspace isolation (team level)
   ownerUserId: { type: String },
   createdAt: { type: Date, default: Date.now },

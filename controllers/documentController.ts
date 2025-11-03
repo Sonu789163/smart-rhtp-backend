@@ -1,5 +1,8 @@
 import { Request, Response } from "express";
 import { Document } from "../models/Document";
+import { SharePermission } from "../models/SharePermission";
+import { Directory } from "../models/Directory";
+import { User } from "../models/User";
 import axios from "axios";
 import FormData from "form-data";
 import { io } from "../index";
@@ -31,6 +34,71 @@ export const documentController = {
     s = s.trim();
     return s;
   },
+
+  // Helper to check if user has access to a directory
+  async hasDirectoryAccess(
+    req: AuthRequest,
+    directoryId: string | null
+  ): Promise<boolean> {
+    try {
+      const user = req.user;
+      // Use actual user domain, not workspace slug (req.userDomain might be slug)
+      const domain = user?.domain || req.userDomain;
+      const userId = user?._id?.toString();
+      
+      // Get the workspace domain from currentWorkspace to check if user is domain admin of workspace domain
+      const workspaceDomain = req.userDomain || domain;
+      
+      // Domain admins of the workspace domain have access to all directories
+      // BUT invited admins from other domains should only see granted directories
+      // Check if user is admin of the workspace domain (not just any admin)
+      if (user?.role === "admin" && user.domain === workspaceDomain) {
+        return true;
+      }
+
+      // Root directory (null directoryId) - all workspace members can access
+      if (!directoryId) return true;
+
+      // Check if user owns the directory
+      const directory = await Directory.findOne({
+        id: directoryId,
+        domain,
+      });
+
+      if (!directory) return false;
+
+      if (directory.ownerUserId === userId) return true;
+
+      // Check user-scoped share permission
+      // SharePermission uses the workspace domain (where the directory exists)
+      if (userId) {
+        const userShare = await SharePermission.findOne({
+          domain: workspaceDomain,
+          resourceType: "directory",
+          resourceId: directoryId,
+          scope: "user",
+          principalId: userId,
+        });
+        if (userShare) return true;
+      }
+
+      // Check workspace-scoped share permission
+      const workspaceKey = req.currentWorkspace || workspaceDomain;
+      const wsShare = await SharePermission.findOne({
+        domain: workspaceDomain,
+        resourceType: "directory",
+        resourceId: directoryId,
+        scope: "workspace",
+        principalId: workspaceKey,
+      });
+
+      return !!wsShare;
+    } catch (error) {
+      console.error("Error in hasDirectoryAccess:", error);
+      // Return false on error to be safe (deny access)
+      return false;
+    }
+  },
   async getAll(req: AuthRequest, res: Response) {
     try {
       const { type, directoryId, includeDeleted } = (req.query || {}) as {
@@ -39,11 +107,27 @@ export const documentController = {
         includeDeleted?: string;
       };
       // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required - domainAuth middleware ensures req.currentWorkspace is set
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({
+          error: "Workspace is required. Please select a workspace.",
+        });
+      }
+
+      // For document queries, use the workspace domain (where documents are stored)
+      // For cross-domain users, req.userDomain should be set to the workspace domain by middleware
+      // But if not, we need to get it from the workspace
+      const userHomeDomain = req.user?.domain || req.userDomain;
+      
+      // Get workspace to find its domain
+      const { Workspace } = await import("../models/Workspace");
+      const workspace = await Workspace.findOne({ workspaceId: currentWorkspace });
+      const workspaceDomain = workspace?.domain || userHomeDomain; // Domain where workspace exists
 
       const query: any = {
-        domain: req.userDomain, // Still filter by domain for security
-        workspaceId: currentWorkspace, // Filter by workspace for isolation
+        domain: workspaceDomain, // Use workspace domain (where documents are stored)
+        workspaceId: currentWorkspace, // Filter by workspace - required
       };
 
       // If a type filter is provided, use it
@@ -146,17 +230,45 @@ export const documentController = {
 
       // no trash filter; return all in directory
 
-      const documents = await Document.find(query).sort({ uploadedAt: -1 });
-      res.json(documents);
+      const allDocuments = await Document.find(query).sort({ uploadedAt: -1 });
+
+      // Filter documents based on directory access permissions
+      // Only show documents from directories the user has access to
+      // Domain admins of the workspace domain see all documents
+      // BUT invited admins from other domains should only see documents in granted directories
+      if (user?.role === "admin" && user.domain === workspaceDomain) {
+        return res.json(allDocuments);
+      }
+
+      // Filter documents: only include those whose parent directory user has access to
+      const accessibleDocuments = await Promise.all(
+        allDocuments.map(async (doc) => {
+          // Check if user has access to the document's parent directory
+          const hasAccess = await documentController.hasDirectoryAccess(req, doc.directoryId || null);
+          return hasAccess ? doc : null;
+        })
+      );
+
+      // Filter out null values (documents without directory access)
+      const filteredDocuments = accessibleDocuments.filter(
+        (d): d is typeof allDocuments[0] => d !== null
+      );
+
+      res.json(filteredDocuments);
     } catch (error) {
-      res.status(500).json({ error: "Failed to fetch documents" });
+      console.error("Error in getAll documents:", error);
+      console.error("Error stack:", (error as Error).stack);
+      res.status(500).json({ error: "Failed to fetch documents", details: String(error) });
     }
   },
 
   async getById(req: AuthRequest, res: Response) {
     try {
-      // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
 
       const query: any = {
         id: req.params.id,
@@ -193,11 +305,18 @@ export const documentController = {
         docData.namespace = docData.name;
       }
       // Keep original namespace as-is to preserve .pdf extension
-      // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
+      
+      // Always use user's actual domain (not workspace slug)
+      // req.userDomain might be workspace slug, but we need the actual user domain
+      const actualDomain = req.user?.domain || req.userDomain;
 
       // Add domain and workspace to document data
-      docData.domain = req.userDomain;
+      docData.domain = actualDomain; // Use actual user domain, not workspace slug
       docData.workspaceId = currentWorkspace;
 
       // Check duplicate by namespace within workspace
@@ -231,8 +350,11 @@ export const documentController = {
 
   async update(req: AuthRequest, res: Response) {
     try {
-      // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
 
       const query: any = {
         id: req.params.id,
@@ -260,8 +382,11 @@ export const documentController = {
 
   async delete(req: AuthRequest, res: Response) {
     try {
-      // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
 
       const query: any = {
         id: req.params.id,
@@ -357,14 +482,27 @@ export const documentController = {
       const fileKey = (req.file as any).key;
       const user = (req as any).user;
       // Use original filename for namespace to preserve .pdf extension
+      // Workspace is required for document upload
+      const workspaceId = req.currentWorkspace;
+      if (!workspaceId) {
+        return res.status(400).json({ error: "Workspace is required. Please select a workspace." });
+      }
+
+      // Get user's domainId
+      const userWithDomain = await User.findById(user._id).select("domainId");
+      if (!userWithDomain?.domainId) {
+        return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
+      }
+
       const docData: any = {
         id: req.body.id || fileKey, // Use provided id from frontend or fallback to fileKey
         name: originalname,
         fileKey: fileKey,
         namespace: originalname || req.body.namespace, // Use original name directly to preserve .pdf
         type: "DRHP", // Set type for DRHP documents
-        domain: user.domain, // Add domain for workspace isolation
-        workspaceId: req.currentWorkspace || user.domain, // Add workspace for team isolation
+        domain: user.domain, // Add domain for workspace isolation - backward compatibility
+        domainId: userWithDomain.domainId, // Link to Domain schema
+        workspaceId, // Workspace required - middleware ensures it's set
         directoryId:
           req.body.directoryId === "root" ? null : req.body.directoryId || null,
       };
@@ -416,6 +554,9 @@ export const documentController = {
       form.append("documentId", document.id);
       form.append("namespace", document.name);
       form.append("name", document.name);
+      form.append("domain", document.domain || user.domain);
+      form.append("domainId", document.domainId || userWithDomain.domainId);
+      form.append("workspaceId", document.workspaceId || workspaceId);
 
       try {
         await axios.post(n8nWebhookUrl, form, {
@@ -476,8 +617,11 @@ export const documentController = {
 
       // Use namespace as-is to preserve .pdf extension
       const queryNamespace = namespace as string;
-      // Get current workspace from request
-      const currentWorkspace = req.currentWorkspace || req.userDomain;
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
 
       const query: any = {
         namespace: queryNamespace,
@@ -544,8 +688,20 @@ export const documentController = {
       const fileKey = (req.file as any).key;
       const user = (req as any).user;
 
+      // Workspace is required for document upload
+      const workspaceId = req.currentWorkspace;
+      if (!workspaceId) {
+        return res.status(400).json({ error: "Workspace is required. Please select a workspace." });
+      }
+
       // Create RHP namespace by appending "-rhp" to the DRHP namespace
       const rhpNamespace = req.file.originalname;
+
+      // Get user's domainId
+      const userWithDomain = await User.findById(user._id).select("domainId");
+      if (!userWithDomain?.domainId) {
+        return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
+      }
 
       const rhpDocData: any = {
         id: fileKey,
@@ -555,8 +711,9 @@ export const documentController = {
         rhpNamespace: rhpNamespace,
         type: "RHP",
         relatedDrhpId: drhp.id,
-        domain: user.domain, // Add domain for workspace isolation
-        workspaceId: req.currentWorkspace || user.domain, // Add workspace for team isolation
+        domain: user.domain, // Add domain for workspace isolation - backward compatibility
+        domainId: userWithDomain.domainId, // Link to Domain schema
+        workspaceId, // Workspace required - middleware ensures it's set
       };
 
       // Add user information if available
@@ -590,6 +747,9 @@ export const documentController = {
       form.append("documentId", rhpDoc.id);
       form.append("namespace", rhpNamespace); // Use RHP namespace for n8n
       form.append("name", drhp.name);
+      form.append("domain", rhpDoc.domain || user.domain);
+      form.append("domainId", rhpDoc.domainId || userWithDomain.domainId);
+      form.append("workspaceId", rhpDoc.workspaceId || workspaceId);
 
       try {
         await axios.post(n8nWebhookUrl, form, {
@@ -625,11 +785,21 @@ export const documentController = {
         return res.status(403).json({ error: "Admin access required" });
       }
 
+      // Admin query: get all documents for the domain (don't filter by workspaceId)
       const query: any = {
         domain: req.user?.domain || req.userDomain, // Use user's actual domain for admin
       };
 
-      console.log("Admin query:", query);
+      // Also check domainId if available
+      const userWithDomain = await User.findById(req.user._id).select("domainId");
+      if (userWithDomain?.domainId) {
+        query.$or = [
+          { domain: req.user?.domain || req.userDomain },
+          { domainId: userWithDomain.domainId }
+        ];
+      }
+
+      console.log("Admin query:", JSON.stringify(query, null, 2));
       const documents = await Document.find(query).sort({ uploadedAt: -1 });
       console.log("Found documents:", documents.length);
       
@@ -650,6 +820,196 @@ export const documentController = {
     } catch (error) {
       console.error("Error fetching admin documents:", error);
       res.status(500).json({ error: "Failed to fetch documents" });
+    }
+  },
+
+  async getAvailableForCompare(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      // Get the document to compare with
+      const document = await Document.findOne({
+        id,
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+      });
+
+      if (!document) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+
+      // Determine the opposite document type
+      const oppositeType = document.type === "DRHP" ? "RHP" : "DRHP";
+
+      // Get all documents of the opposite type that are not already linked
+      const availableDocuments = await Document.find({
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+        type: oppositeType,
+        // Exclude documents that are already linked to this document
+        $and: [
+          { id: { $ne: document.id } },
+          { relatedDrhpId: { $ne: document.id } },
+          { relatedRhpId: { $ne: document.id } }
+        ]
+      }).select('id name type uploadedAt namespace').sort({ uploadedAt: -1 });
+
+      res.json({
+        selectedDocument: {
+          id: document.id,
+          name: document.name,
+          type: document.type,
+          uploadedAt: document.uploadedAt
+        },
+        availableDocuments
+      });
+    } catch (error) {
+      console.error("Error fetching available documents for compare:", error);
+      res.status(500).json({ error: "Failed to fetch available documents" });
+    }
+  },
+
+  async linkForCompare(req: AuthRequest, res: Response) {
+    try {
+      const { drhpId, rhpId } = req.body;
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      if (!drhpId || !rhpId) {
+        return res.status(400).json({ error: "Both DRHP and RHP IDs are required" });
+      }
+
+      // Verify both documents exist and belong to the user
+      const drhpDoc = await Document.findOne({
+        id: drhpId,
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+        type: "DRHP"
+      });
+
+      const rhpDoc = await Document.findOne({
+        id: rhpId,
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+        type: "RHP"
+      });
+
+      if (!drhpDoc || !rhpDoc) {
+        return res.status(404).json({ error: "One or both documents not found" });
+      }
+
+      // Check if documents are already linked
+      if (drhpDoc.relatedRhpId === rhpId || rhpDoc.relatedDrhpId === drhpId) {
+        return res.status(400).json({ error: "Documents are already linked" });
+      }
+
+      // Link the documents
+      drhpDoc.relatedRhpId = rhpId;
+      rhpDoc.relatedDrhpId = drhpId;
+
+      await drhpDoc.save();
+      await rhpDoc.save();
+
+      // Publish event for the linking
+      await publishEvent({
+        actorUserId: req.user?._id?.toString?.(),
+        domain: req.userDomain!,
+        action: "documents.linked",
+        resourceType: "document",
+        resourceId: drhpId,
+        title: `Documents linked for comparison: ${drhpDoc.name} ↔ ${rhpDoc.name}`,
+        notifyWorkspace: true,
+      });
+
+      res.json({
+        message: "Documents linked successfully for comparison",
+        drhpDocument: {
+          id: drhpDoc.id,
+          name: drhpDoc.name,
+          type: drhpDoc.type
+        },
+        rhpDocument: {
+          id: rhpDoc.id,
+          name: rhpDoc.name,
+          type: rhpDoc.type
+        }
+      });
+    } catch (error) {
+      console.error("Error linking documents for compare:", error);
+      res.status(500).json({ error: "Failed to link documents" });
+    }
+  },
+
+  async unlinkForCompare(req: AuthRequest, res: Response) {
+    try {
+      const { id } = req.params;
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
+      const document = await Document.findOne({
+        id,
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+      });
+
+      if (!document) {
+        return res.status(404).json({ error: "Document not found" });
+      }
+
+      let linkedDocument = null;
+
+      // Unlink based on document type
+      if (document.type === "DRHP" && document.relatedRhpId) {
+        linkedDocument = await Document.findOne({
+          id: document.relatedRhpId,
+          domain: req.userDomain,
+          workspaceId: currentWorkspace,
+        });
+        
+        if (linkedDocument) {
+          linkedDocument.relatedDrhpId = undefined;
+          await linkedDocument.save();
+        }
+        
+        document.relatedRhpId = undefined;
+        await document.save();
+      } else if (document.type === "RHP" && document.relatedDrhpId) {
+        linkedDocument = await Document.findOne({
+          id: document.relatedDrhpId,
+          domain: req.userDomain,
+          workspaceId: currentWorkspace,
+        });
+        
+        if (linkedDocument) {
+          linkedDocument.relatedRhpId = undefined;
+          await linkedDocument.save();
+        }
+        
+        document.relatedDrhpId = undefined;
+        await document.save();
+      }
+
+      // Publish event for the unlinking
+      await publishEvent({
+        actorUserId: req.user?._id?.toString?.(),
+        domain: req.userDomain!,
+        action: "documents.unlinked",
+        resourceType: "document",
+        resourceId: document.id,
+        title: `Documents unlinked: ${document.name}`,
+        notifyWorkspace: true,
+      });
+
+      res.json({
+        message: "Documents unlinked successfully",
+        unlinkedDocument: {
+          id: document.id,
+          name: document.name,
+          type: document.type
+        }
+      });
+    } catch (error) {
+      console.error("Error unlinking documents:", error);
+      res.status(500).json({ error: "Failed to unlink documents" });
     }
   },
 };

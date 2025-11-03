@@ -4,11 +4,13 @@ const workspaceSchema = new mongoose.Schema({
   workspaceId: { type: String, required: true, unique: true, index: true },
 
   // Company domain that owns this workspace (ex: "excollo.com")
-  domain: { type: String, required: true, index: true },
+  domain: { type: String, required: true, index: true }, // Keep for backward compatibility
+  domainId: { type: String, required: true, index: true }, // Link to Domain schema
 
   // Human-readable name and URL-friendly slug (unique within the same domain)
   name: { type: String, required: true, trim: true },
   slug: { type: String, required: true, trim: true },
+  description: { type: String, trim: true }, // Optional description
 
   // Ownership and admins
   ownerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

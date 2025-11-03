@@ -16,6 +16,7 @@ import directoryRoutes from "./routes/directory.routes";
 import shareRoutes from "./routes/share.routes";
 import notificationRoutes from "./routes/notification.routes";
 import workspaceRoutes from "./routes/workspace.routes";
+import workspaceRequestRoutes from "./routes/workspaceRequest.routes";
 import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import helmet from "helmet";
@@ -77,7 +78,13 @@ if (!MONGODB_URI) {
 }
 
 mongoose
-  .connect(MONGODB_URI)
+  .connect(MONGODB_URI, {
+    serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+    socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+    connectTimeoutMS: 10000, // Give up initial connection after 10s
+    retryWrites: true,
+    retryReads: true,
+  })
   .then(async () => {
     console.log("Connected to MongoDB");
     // Test SMTP connection on startup (non-blocking)
@@ -88,6 +95,19 @@ mongoose
   .catch((error) => {
     console.error("MongoDB connection error:", error);
   });
+
+// Handle MongoDB connection errors after initial connect
+mongoose.connection.on('error', (err) => {
+  console.error('MongoDB connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.warn('MongoDB disconnected. Attempting to reconnect...');
+});
+
+mongoose.connection.on('reconnected', () => {
+  console.log('MongoDB reconnected');
+});
 
 // Routes
 app.use("/api/auth", authRoutes);
@@ -103,6 +123,7 @@ app.use("/api/directories", directoryRoutes);
 app.use("/api/shares", shareRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/workspaces", workspaceRoutes);
+app.use("/api/workspace-requests", workspaceRequestRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {

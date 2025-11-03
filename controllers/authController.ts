@@ -12,12 +12,17 @@ import { sendEmail } from "../services/emailService";
 // Creates an access token and a refresh token, stores the refresh
 // token in the user's document for later revocation, and returns both.
 const generateTokens = async (user: any) => {
+  // Get domainId from user if available
+  const userWithDomain = await User.findById(user._id).select("domainId").lean();
+  const domainId = userWithDomain?.domainId || (user.domainId);
+  
   const accessToken = jwt.sign(
     {
       userId: user._id,
       email: user.email,
       role: user.role,
       domain: user.domain,
+      domainId: domainId, // Add domainId to JWT
     },
     process.env.JWT_SECRET!,
     { expiresIn: "1d" }
@@ -28,6 +33,7 @@ const generateTokens = async (user: any) => {
       email: user.email,
       role: user.role,
       domain: user.domain,
+      domainId: domainId, // Add domainId to JWT
     },
     process.env.JWT_REFRESH_SECRET!,
     { expiresIn: "7d" }
@@ -61,19 +67,36 @@ export const authController = {
       }
 
       // Get the primary domain from email
-      const domain = getPrimaryDomain(email);
-      if (!domain) {
+      const domainName = getPrimaryDomain(email);
+      if (!domainName) {
         return res.status(400).json({ message: "Invalid domain" });
       }
 
+      // Create or get Domain record
+      const { Domain } = await import("../models/Domain");
+      let domain = await Domain.findOne({ domainName, status: "active" });
+      
+      if (!domain) {
+        // New domain - create it automatically
+        const domainId = `domain_${domainName.toLowerCase().replace(/[^a-z0-9]/g, "-")}_${Date.now()}`;
+        domain = new Domain({
+          domainId,
+          domainName,
+          status: "active",
+        });
+        await domain.save();
+        console.log(`✅ Created new domain: ${domainName} (${domainId})`);
+      }
+
       // Check if this is the first user in the domain (will become admin)
-      const isFirstUserInDomain = (await User.countDocuments({ domain })) === 0;
+      const isFirstUserInDomain = (await User.countDocuments({ domainId: domain.domainId })) === 0;
       const role = isFirstUserInDomain ? "admin" : "user";
 
       const hashedPassword = await bcrypt.hash(password, 10);
       user = new User({
         email,
-        domain,
+        domain: domainName, // Keep for backward compatibility
+        domainId: domain.domainId, // Link to Domain schema
         password: hashedPassword,
         name: name || email.split("@")[0], // Use email prefix as name if not provided
         role: role, // Make sure role is set
@@ -187,8 +210,12 @@ export const authController = {
         return res.status(403).json({ message: "Invalid refresh token" });
       }
 
+      // Get domainId from user if available
+      const userWithDomain = await User.findById(user._id).select("domainId").lean();
+      const domainId = userWithDomain?.domainId || (user.domainId);
+
       const accessToken = jwt.sign(
-        { userId: user._id, email: user.email, role: user.role },
+        { userId: user._id, email: user.email, role: user.role, domain: user.domain, domainId: domainId },
         process.env.JWT_SECRET!,
         { expiresIn: "1d" }
       );
