@@ -49,3 +49,4 @@ workspaceRequestSchema.index({ workspaceId: 1, status: 1 });
 
 export const WorkspaceRequest = mongoose.model("WorkspaceRequest", workspaceRequestSchema);
 
+

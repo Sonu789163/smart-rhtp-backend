@@ -216,15 +216,33 @@ export const workspaceInvitationController = {
       const { invitationId } = req.params;
       const userId = req.user._id;
 
-      // Look up invitation by id first for better error messages
+      // Look up invitation by id (check all statuses first to provide better error messages)
       const invitation = await WorkspaceInvitation.findOne({
         invitationId,
-        status: "pending",
       });
 
       if (!invitation) {
         return res.status(404).json({
-          message: "Invitation not found or already processed",
+          message: "Invitation not found",
+        });
+      }
+
+      // Check if invitation is already accepted
+      if (invitation.status === "accepted") {
+        return res.status(400).json({
+          message: "This invitation has already been accepted",
+          invitation: {
+            invitationId: invitation.invitationId,
+            status: invitation.status,
+            acceptedAt: invitation.acceptedAt,
+          },
+        });
+      }
+
+      // Check if invitation is pending
+      if (invitation.status !== "pending") {
+        return res.status(400).json({
+          message: `This invitation has been ${invitation.status}`,
         });
       }
 
@@ -262,8 +280,15 @@ export const workspaceInvitationController = {
       });
 
       if (existingMembership) {
+        // If membership exists but invitation is still pending, update invitation status
+        if (invitation.status === "pending") {
+          invitation.status = "accepted";
+          invitation.acceptedAt = new Date();
+          await invitation.save();
+        }
         return res.status(400).json({
           message: "You already have access to this workspace",
+          alreadyAccepted: true,
         });
       }
 
@@ -351,10 +376,32 @@ export const workspaceInvitationController = {
         }
       }
 
-      // Update invitation status
+      // Update invitation status to accepted
       invitation.status = "accepted";
       invitation.acceptedAt = new Date();
-      await invitation.save();
+      
+      // Save invitation with error handling
+      try {
+        await invitation.save();
+        console.log(`Invitation ${invitationId} status updated to accepted`);
+      } catch (saveError: any) {
+        console.error("Error saving invitation status:", saveError);
+        // Continue even if save fails, but log it
+      }
+
+      // Verify the status was saved
+      const savedInvitation = await WorkspaceInvitation.findOne({
+        invitationId,
+      });
+      
+      if (savedInvitation?.status !== "accepted") {
+        console.error(`Warning: Invitation ${invitationId} status may not have been saved correctly. Expected: accepted, Got: ${savedInvitation?.status}`);
+        // Try to update again
+        await WorkspaceInvitation.updateOne(
+          { invitationId },
+          { status: "accepted", acceptedAt: new Date() }
+        );
+      }
 
       res.json({
         message: "Invitation accepted successfully",
@@ -362,6 +409,10 @@ export const workspaceInvitationController = {
           workspaceId: invitation.workspaceId,
           name: invitation.workspaceName,
           role: membership.role,
+        },
+        invitation: {
+          invitationId: invitation.invitationId,
+          status: "accepted",
         },
       });
     } catch (error) {
