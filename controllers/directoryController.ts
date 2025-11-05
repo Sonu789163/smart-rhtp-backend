@@ -178,32 +178,44 @@ export const directoryController = {
       const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
       const isSameDomainAdmin = req.user?.role === "admin" && userDomain === workspaceDomain;
 
-      console.log(`[listChildren] User: ${req.user?.email}, UserDomain: ${userDomain}, WorkspaceDomain: ${workspaceDomain}, IsCrossDomain: ${isCrossDomainUser}, IsSameDomainAdmin: ${isSameDomainAdmin}`);
-      console.log(`[listChildren] Total directories found: ${allDirs.length}`);
-      
-      // Debug: Check all SharePermissions for this user
-      if (userId && isCrossDomainUser) {
-        const allUserShares = await SharePermission.find({
-          domain,
-          scope: "user",
-          principalId: userId,
-          resourceType: "directory",
-        });
-        console.log(`[listChildren] SharePermissions for user ${userId} in domain ${domain}:`, allUserShares.map(s => ({ dirId: s.resourceId, role: s.role })));
-      }
-
       const visibleDirs = await Promise.all(
         allDirs.map(async (dir) => {
           // Same-domain admins can see all directories
-          if (isSameDomainAdmin) {
-            console.log(`[listChildren] Same-domain admin - showing directory: ${dir.name} (${dir.id})`);
-            return dir;
+          if (isSameDomainAdmin) return dir;
+
+          // For cross-domain users (both admin and regular), they can ONLY see directories with SharePermission
+          // Cross-domain users won't own directories in other domains, so skip owner check for them
+          if (isCrossDomainUser) {
+            // Cross-domain users can only see directories with explicit SharePermission
+            if (userId) {
+              const userShare = await SharePermission.findOne({
+                domain,
+                resourceType: "directory",
+                resourceId: dir.id,
+                scope: "user",
+                principalId: userId,
+              });
+              if (userShare) return dir;
+            }
+
+            // Check workspace-scoped share permission
+            const wsShare = await SharePermission.findOne({
+              domain,
+              resourceType: "directory",
+              resourceId: dir.id,
+              scope: "workspace",
+              principalId: currentWorkspace,
+            });
+            if (wsShare) return dir;
+
+            // No permission - don't show this directory
+            return null;
           }
 
-          // For cross-domain users (both admin and regular), they can only see directories they have explicit access to
-          // Cross-domain users won't own directories in other domains, so skip owner check
-          
-          // Check user-scoped share permission (this is the key for cross-domain users)
+          // For same-domain users (non-admin), check ownership and shares
+          if (dir.ownerUserId === userId) return dir;
+
+          // Check user-scoped share permission
           if (userId) {
             const userShare = await SharePermission.findOne({
               domain,
@@ -212,16 +224,7 @@ export const directoryController = {
               scope: "user",
               principalId: userId,
             });
-            if (userShare) {
-              console.log(`[listChildren] Found SharePermission for directory: ${dir.name} (${dir.id})`);
-              return dir;
-            }
-          }
-
-          // For same-domain non-admin users, check if they own the directory
-          if (!isCrossDomainUser && dir.ownerUserId === userId) {
-            console.log(`[listChildren] User owns directory: ${dir.name} (${dir.id})`);
-            return dir;
+            if (userShare) return dir;
           }
 
           // Check workspace-scoped share permission
@@ -232,15 +235,9 @@ export const directoryController = {
             scope: "workspace",
             principalId: currentWorkspace,
           });
-          if (wsShare) {
-            console.log(`[listChildren] Found workspace SharePermission for directory: ${dir.name} (${dir.id})`);
-            return dir;
-          }
+          if (wsShare) return dir;
 
           // No permission - don't show this directory
-          if (isCrossDomainUser) {
-            console.log(`[listChildren] Cross-domain user - NO access to directory: ${dir.name} (${dir.id})`);
-          }
           return null;
         })
       );
@@ -265,38 +262,30 @@ export const directoryController = {
 
       // Filter documents based on directory access permissions
       // Only show documents from directories the user has access to
-      // Cross-domain users (both admin and regular) should only see documents in directories they have access to
+      // Cross-domain users should only see documents in directories they have access to
       let docs = allDocs;
-      const shouldFilterDocs = isCrossDomainUser || req.user?.role !== "admin" || (req.user?.role === "admin" && !isSameDomainAdmin);
-      console.log(`[listChildren] Should filter documents: ${shouldFilterDocs}, Total docs: ${allDocs.length}, Visible dirs: ${dirs.length}`);
       
-      if (shouldFilterDocs) {
+      // Only filter if user is NOT a same-domain admin
+      if (!isSameDomainAdmin) {
         // Check access for each document's directory
         const accessibleDocs = await Promise.all(
           allDocs.map(async (doc) => {
             const docDirId = doc.directoryId || null;
 
-            // For cross-domain users, root directory documents should also be restricted
+            // For cross-domain users, root directory documents should be restricted
             // They should only see documents in directories they have explicit access to
             if (isCrossDomainUser && !docDirId) {
-              // Cross-domain users don't have access to root documents unless explicitly granted
-              console.log(`[listChildren] Cross-domain user - blocking root document: ${doc.name}`);
+              // Cross-domain users don't have access to root documents
               return null;
             }
 
             // For same-domain users, root directory documents are accessible
-            if (!isCrossDomainUser && !docDirId) {
-              console.log(`[listChildren] Same-domain user - allowing root document: ${doc.name}`);
-              return doc;
-            }
+            if (!isCrossDomainUser && !docDirId) return doc;
 
             // Check if directory is in the visible directories list (already filtered)
             // This is the most reliable check - if directory is visible, documents in it are accessible
             const hasDirAccess = dirs.some((d) => d.id === docDirId);
-            if (hasDirAccess) {
-              console.log(`[listChildren] Document in accessible directory: ${doc.name} (dir: ${docDirId})`);
-              return doc;
-            }
+            if (hasDirAccess) return doc;
 
             // For same-domain non-admin users, check if they own the directory
             if (!isCrossDomainUser && userId) {
