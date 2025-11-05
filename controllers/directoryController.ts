@@ -178,6 +178,18 @@ export const directoryController = {
       const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
       const isSameDomainAdmin = req.user?.role === "admin" && userDomain === workspaceDomain;
 
+      // Debug: Log all SharePermissions for this user to see what exists
+      if (userId && isCrossDomainUser) {
+        const allShares = await SharePermission.find({
+          scope: "user",
+          principalId: userId,
+          resourceType: "directory",
+        });
+        console.log(`[listChildren] All SharePermissions for cross-domain user ${req.user?.email} (${userId}):`, 
+          allShares.map(s => ({ domain: s.domain, resourceId: s.resourceId, role: s.role })));
+        console.log(`[listChildren] Querying with domain: ${domain}, workspaceDomain: ${workspaceDomain}`);
+      }
+
       const visibleDirs = await Promise.all(
         allDirs.map(async (dir) => {
           // Same-domain admins can see all directories
@@ -195,7 +207,12 @@ export const directoryController = {
                 scope: "user",
                 principalId: userId,
               });
-              if (userShare) return dir;
+              if (userShare) {
+                console.log(`[listChildren] Found SharePermission for directory ${dir.name} (${dir.id})`);
+                return dir;
+              } else {
+                console.log(`[listChildren] NO SharePermission found for directory ${dir.name} (${dir.id}) with domain ${domain}, userId ${userId}`);
+              }
             }
 
             // Check workspace-scoped share permission
@@ -206,7 +223,10 @@ export const directoryController = {
               scope: "workspace",
               principalId: currentWorkspace,
             });
-            if (wsShare) return dir;
+            if (wsShare) {
+              console.log(`[listChildren] Found workspace SharePermission for directory ${dir.name} (${dir.id})`);
+              return dir;
+            }
 
             // No permission - don't show this directory
             return null;
