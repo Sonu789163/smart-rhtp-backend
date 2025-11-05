@@ -47,18 +47,24 @@ export const documentController = {
       // Get the workspace domain - for cross-domain users, req.userDomain is set to workspace domain by middleware
       // For same-domain users, req.userDomain equals user.domain
       const workspaceDomain = req.userDomain || req.user?.domain;
+      const userDomain = user?.domain;
+      const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
+      const isSameDomainAdmin = user?.role === "admin" && userDomain === workspaceDomain;
       
-      // Domain admins of the workspace domain have access to all directories
-      // BUT invited admins from other domains should only see granted directories
-      // Check if user is admin of the workspace domain (not just any admin)
-      if (user?.role === "admin" && user.domain === workspaceDomain) {
+      // Same-domain admins of the workspace domain have access to all directories
+      if (isSameDomainAdmin) {
         return true;
       }
 
-      // Root directory (null directoryId) - all workspace members can access
-      if (!directoryId) return true;
+      // Root directory (null directoryId)
+      // Cross-domain users should NOT have access to root directory (they need explicit directory access)
+      // Same-domain users can access root directory
+      if (!directoryId) {
+        return !isCrossDomainUser;
+      }
 
       // Check if user owns the directory - use workspace domain for directory lookup
+      // Cross-domain users won't own directories in other domains, so skip this check
       const directory = await Directory.findOne({
         id: directoryId,
         domain: workspaceDomain, // Use workspace domain, not user domain
@@ -66,9 +72,10 @@ export const documentController = {
 
       if (!directory) return false;
 
-      if (directory.ownerUserId === userId) return true;
+      // Only check ownership for same-domain users
+      if (!isCrossDomainUser && directory.ownerUserId === userId) return true;
 
-      // Check user-scoped share permission
+      // Check user-scoped share permission (this is the key for cross-domain users)
       // SharePermission uses the workspace domain (where the directory exists)
       if (userId) {
         const userShare = await SharePermission.findOne({
@@ -234,10 +241,10 @@ export const documentController = {
       // Filter documents based on directory access permissions
       // Only show documents from directories the user has access to
       // Same-domain admins of the workspace domain see all documents
-      // BUT cross-domain admins (invited from other domains) should only see documents in granted directories
+      // BUT cross-domain users (both admin and regular, invited from other domains) should only see documents in granted directories
       const userDomain = user?.domain;
       const isSameDomainAdmin = user?.role === "admin" && userDomain && userDomain === workspaceDomain;
-      const isCrossDomainAdmin = user?.role === "admin" && userDomain && userDomain !== workspaceDomain;
+      const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
       
       if (isSameDomainAdmin) {
         return res.json(allDocuments);
