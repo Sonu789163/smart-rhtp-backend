@@ -42,12 +42,11 @@ export const documentController = {
   ): Promise<boolean> {
     try {
       const user = req.user;
-      // Use actual user domain, not workspace slug (req.userDomain might be slug)
-      const domain = user?.domain || req.userDomain;
       const userId = user?._id?.toString();
       
-      // Get the workspace domain from currentWorkspace to check if user is domain admin of workspace domain
-      const workspaceDomain = req.userDomain || domain;
+      // Get the workspace domain - for cross-domain users, req.userDomain is set to workspace domain by middleware
+      // For same-domain users, req.userDomain equals user.domain
+      const workspaceDomain = req.userDomain || req.user?.domain;
       
       // Domain admins of the workspace domain have access to all directories
       // BUT invited admins from other domains should only see granted directories
@@ -59,10 +58,10 @@ export const documentController = {
       // Root directory (null directoryId) - all workspace members can access
       if (!directoryId) return true;
 
-      // Check if user owns the directory
+      // Check if user owns the directory - use workspace domain for directory lookup
       const directory = await Directory.findOne({
         id: directoryId,
-        domain,
+        domain: workspaceDomain, // Use workspace domain, not user domain
       });
 
       if (!directory) return false;
