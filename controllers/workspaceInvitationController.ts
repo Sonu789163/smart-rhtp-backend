@@ -168,16 +168,23 @@ export const workspaceInvitationController = {
   // Get all invitations for a workspace (admin only)
   async getWorkspaceInvitations(req: AuthRequest, res: Response) {
     try {
-      const workspaceDomain = req.userDomain;
-
       if (req.user.role !== "admin") {
         return res.status(403).json({
           message: "Only workspace admins can view invitations",
         });
       }
 
+      // Use workspaceId from currentWorkspace (set by domainAuth middleware)
+      const currentWorkspaceId = req.currentWorkspace;
+      if (!currentWorkspaceId) {
+        return res.status(400).json({
+          message: "Workspace context not found",
+        });
+      }
+
+      // Query by workspaceId (more reliable than workspaceDomain for cross-domain scenarios)
       const invitations = await WorkspaceInvitation.find({
-        workspaceDomain,
+        workspaceId: currentWorkspaceId,
         inviterId: req.user._id,
       })
         .sort({ createdAt: -1 })
@@ -341,6 +348,7 @@ export const workspaceInvitationController = {
 
             if (directory) {
               // Check if share already exists to avoid duplicates
+              // Query should match the actual document structure
               const existingShare = await SharePermission.findOne({
                 domain: actualDomain,
                 resourceType: "directory",
@@ -355,21 +363,39 @@ export const workspaceInvitationController = {
                   .toString(36)
                   .substr(2, 9)}`;
 
-                // Create user-scoped share permission
-                // Use actual domain, not workspace slug
-                const share = new SharePermission({
-                  id: shareId,
-                  resourceType: "directory",
-                  resourceId: dirAccess.directoryId,
-                  domain: actualDomain, // Use actual domain (e.g., "excollo.com"), not workspace slug
-                  scope: "user",
-                  principalId: userIdString,
-                  role: dirAccess.role,
-                  invitedEmail: invitation.inviteeEmail,
-                  createdBy: invitation.inviterId.toString(),
-                });
-
-                await share.save();
+                // Use updateOne with upsert to avoid duplicate key errors
+                // This ensures we don't create duplicates even if the index constraint is violated
+                await SharePermission.updateOne(
+                  {
+                    domain: actualDomain,
+                    resourceType: "directory",
+                    resourceId: dirAccess.directoryId,
+                    scope: "user",
+                    principalId: userIdString,
+                  },
+                  {
+                    $setOnInsert: {
+                      id: shareId,
+                      resourceType: "directory",
+                      resourceId: dirAccess.directoryId,
+                      domain: actualDomain,
+                      scope: "user",
+                      principalId: userIdString,
+                      role: dirAccess.role,
+                      invitedEmail: invitation.inviteeEmail,
+                      createdBy: invitation.inviterId.toString(),
+                      // Don't set linkToken at all - let it be undefined for user-scoped shares
+                      // This avoids the sparse unique index conflict
+                    },
+                  },
+                  { upsert: true }
+                );
+              } else {
+                // Update role if it's different
+                if (existingShare.role !== dirAccess.role) {
+                  existingShare.role = dirAccess.role;
+                  await existingShare.save();
+                }
               }
             }
           }
@@ -748,43 +774,119 @@ export const workspaceInvitationController = {
           .json({ message: "Only admins can revoke access" });
       }
 
-      const { userEmail } = req.body as { userEmail: string };
-      if (!userEmail) {
-        return res.status(400).json({ message: "userEmail is required" });
+      const { invitationId } = req.body as { invitationId: string };
+      if (!invitationId) {
+        return res.status(400).json({ message: "invitationId is required" });
       }
 
-      const user = await User.findOne({ email: userEmail.toLowerCase() });
-      if (!user) return res.status(404).json({ message: "User not found" });
+      // Get the current workspace ID from the request context
+      const headerWorkspace = req.headers["x-workspace"] as string;
+      const currentWorkspaceId = headerWorkspace || req.currentWorkspace || req.userDomain;
+      
+      if (!currentWorkspaceId) {
+        return res.status(400).json({ 
+          message: "Workspace context not found. Please ensure you have selected a workspace." 
+        });
+      }
 
+      // Find the invitation by ID
+      const invitation = await WorkspaceInvitation.findOne({
+        invitationId,
+        workspaceId: currentWorkspaceId,
+      });
+
+      if (!invitation) {
+        return res.status(404).json({ message: "Invitation not found" });
+      }
+
+      // Get the user from the invitation
+      const user = await User.findOne({ email: invitation.inviteeEmail.toLowerCase() });
+      if (!user) {
+        // If user doesn't exist, just delete the invitation
+        await WorkspaceInvitation.deleteOne({ _id: invitation._id });
+        return res.json({ 
+          message: "Invitation deleted (user not found)",
+          deleted: {
+            membership: 0,
+            invitations: 1,
+            directoryShares: 0,
+          },
+        });
+      }
+
+      // Check if user has membership in this workspace
+      const membership = await WorkspaceMembership.findOne({
+        userId: user._id,
+        workspaceId: currentWorkspaceId,
+      });
+
+      // Delete WorkspaceMembership if exists (regardless of status)
+      let deletedMembership = false;
+      if (membership) {
+        await WorkspaceMembership.deleteOne({ _id: membership._id });
+        deletedMembership = true;
+        console.log(`Deleted membership for user ${invitation.inviteeEmail} in workspace ${currentWorkspaceId}`);
+      }
+
+      // Remove from legacy accessibleWorkspaces
       const before = (user.accessibleWorkspaces || []).length;
-      user.accessibleWorkspaces = (user.accessibleWorkspaces || []).filter(
-        (ws: any) =>
-          (ws.workspaceDomain || "").toLowerCase() !==
-          (req.userDomain || "").toLowerCase()
-      );
+      user.accessibleWorkspaces = (user.accessibleWorkspaces || []).filter((ws: any) => {
+        const wsDomain = (ws.workspaceDomain || "").toLowerCase();
+        return wsDomain !== currentWorkspaceId.toLowerCase();
+      });
 
-      // If currentWorkspace was this domain, switch to primary domain if still present
-      if (
-        (user.currentWorkspace || "").toLowerCase() ===
-        (req.userDomain || "").toLowerCase()
-      ) {
-        const primary = (user.domain || "").toLowerCase();
-        const hasPrimary = (user.accessibleWorkspaces || []).some(
-          (w: any) => (w.workspaceDomain || "").toLowerCase() === primary
-        );
-        user.currentWorkspace = hasPrimary
-          ? user.domain
-          : user.accessibleWorkspaces?.[0]?.workspaceDomain || "";
-      }
+      // If currentWorkspace was this workspace, switch to another available workspace
+      if ((user.currentWorkspace || "").toLowerCase() === currentWorkspaceId.toLowerCase()) {
+        // Try to find another active membership
+        const otherMemberships = await WorkspaceMembership.find({
+          userId: user._id,
+          status: "active",
+          workspaceId: { $ne: currentWorkspaceId },
+        });
 
-      if ((user.accessibleWorkspaces || []).length === before) {
-        return res
-          .status(404)
-          .json({ message: "User did not have access to this workspace" });
+        if (otherMemberships.length > 0) {
+          user.currentWorkspace = otherMemberships[0].workspaceId;
+        } else if ((user.accessibleWorkspaces || []).length > 0) {
+          user.currentWorkspace = user.accessibleWorkspaces?.[0]?.workspaceDomain || "";
+        } else {
+          // Switch to user's own domain if no other workspace
+          user.currentWorkspace = user.domain || "";
+        }
       }
 
       await user.save();
-      return res.json({ message: "Access revoked" });
+
+      // Revoke all directory access for this user in this workspace
+      const workspace = await Workspace.findOne({ workspaceId: currentWorkspaceId });
+      let deletedShares = 0;
+      if (workspace) {
+        // Get all directories in this workspace's domain
+        const directories = await Directory.find({ domain: workspace.domain });
+        const directoryIds = directories.map(d => d.id);
+        
+        // Delete all share permissions for this user in these directories
+        const deleteResult = await SharePermission.deleteMany({
+          principalId: user._id.toString(),
+          resourceType: "directory",
+          resourceId: { $in: directoryIds },
+          scope: "user",
+        });
+        deletedShares = deleteResult.deletedCount;
+        console.log(`Deleted ${deletedShares} directory share(s) for user ${invitation.inviteeEmail}`);
+      }
+
+      // Delete the specific invitation record
+      await WorkspaceInvitation.deleteOne({ _id: invitation._id });
+      console.log(`Deleted invitation ${invitationId} for user ${invitation.inviteeEmail} in workspace ${currentWorkspaceId}`);
+
+      return res.json({ 
+        message: "Invitation and membership deleted successfully",
+        deleted: {
+          membership: deletedMembership ? 1 : 0,
+          invitations: 1,
+          directoryShares: deletedShares,
+        },
+      });
     } catch (error) {
       console.error("Error revoking user access:", error);
       return res.status(500).json({ message: "Failed to revoke access" });
@@ -864,25 +966,46 @@ export const workspaceInvitationController = {
             await existingShare.save();
             granted.push(directoryId);
           } else {
-            // Create new share
+            // Create new share using updateOne with upsert to avoid duplicate key errors
             const shareId = `shr_${Date.now()}_${Math.random()
               .toString(36)
               .substr(2, 9)}`;
 
-            const share = new SharePermission({
-              id: shareId,
-              resourceType: "directory",
-              resourceId: directoryId,
-              domain,
-              scope: "user",
-              principalId: userIdString,
-              role,
-              invitedEmail: userEmail.toLowerCase(),
-              createdBy: req.user._id.toString(),
-            });
-
-            await share.save();
-            granted.push(directoryId);
+            try {
+              await SharePermission.updateOne(
+                {
+                  domain,
+                  resourceType: "directory",
+                  resourceId: directoryId,
+                  scope: "user",
+                  principalId: userIdString,
+                },
+                {
+                  $setOnInsert: {
+                    id: shareId,
+                    resourceType: "directory",
+                    resourceId: directoryId,
+                    domain,
+                    scope: "user",
+                    principalId: userIdString,
+                    role,
+                    invitedEmail: userEmail.toLowerCase(),
+                    createdBy: req.user._id.toString(),
+                    // Don't set linkToken - let it be undefined for user-scoped shares
+                  },
+                },
+                { upsert: true }
+              );
+              granted.push(directoryId);
+            } catch (saveError: any) {
+              // Handle duplicate key error gracefully
+              if (saveError.code === 11000 && saveError.keyPattern?.scope && saveError.keyPattern?.linkToken) {
+                console.log(`Share permission already exists for directory ${directoryId} and user ${userIdString}, skipping...`);
+                granted.push(directoryId); // Consider it granted since it already exists
+              } else {
+                throw saveError; // Re-throw if it's a different error
+              }
+            }
           }
         } catch (error: any) {
           errors.push(`Failed to grant access to ${directoryId}: ${error.message}`);

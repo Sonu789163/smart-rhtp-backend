@@ -3,6 +3,7 @@ import { Directory } from "../models/Directory";
 import { User } from "../models/User";
 import { Document } from "../models/Document";
 import { SharePermission } from "../models/SharePermission";
+import { Workspace } from "../models/Workspace";
 import { publishEvent } from "../lib/events";
 
 interface AuthRequest extends Request {
@@ -151,12 +152,17 @@ export const directoryController = {
         return res.status(400).json({ error: "Workspace is required" });
       }
 
-      // Use actual user domain when querying directories (not workspace slug)
-      // Directories are stored with actual domain, not workspace slug
-      const actualDomain = req.user?.domain || req.userDomain;
+      // Get the workspace to determine the correct domain
+      // For cross-domain users, we need the workspace's domain, not the user's domain
+      const workspace = await Workspace.findOne({ workspaceId: currentWorkspace });
+      const workspaceDomain = workspace?.domain || req.userDomain || req.user?.domain;
+
+      // Use workspace domain when querying directories (not user's domain)
+      // Directories are stored with workspace's domain
+      const actualDomain = workspaceDomain;
 
       const filter: any = {
-        domain: actualDomain, // Use actual domain, not workspace slug
+        domain: actualDomain, // Use workspace domain, not user domain
         workspaceId: currentWorkspace,
         parentId,
       };
@@ -164,8 +170,8 @@ export const directoryController = {
 
       // Filter directories by user permissions (only show directories user has access to)
       const userId = req.user?._id?.toString();
-      // Use actual user domain, not workspace slug (req.userDomain might be slug)
-      const domain = req.user?.domain || req.userDomain;
+      // Use workspace domain for SharePermission lookups (not user domain)
+      const domain = workspaceDomain;
 
       const visibleDirs = await Promise.all(
         allDirs.map(async (dir) => {
@@ -206,10 +212,10 @@ export const directoryController = {
       const dirs = visibleDirs.filter((d): d is typeof allDirs[0] => d !== null);
 
       // Documents under this directory
-      // Use actual domain when querying documents (not workspace slug)
-      const actualDomainForDocs = req.user?.domain || req.userDomain;
+      // Use workspace domain when querying documents (not user domain)
+      const actualDomainForDocs = workspaceDomain;
       const docFilter: any = {
-        domain: actualDomainForDocs, // Use actual domain, not workspace slug
+        domain: actualDomainForDocs, // Use workspace domain, not user domain
         workspaceId: currentWorkspace,
       };
       docFilter.directoryId = parentId;
@@ -240,8 +246,8 @@ export const directoryController = {
             const directory = dirs.find((d) => d.id === docDirId);
             if (directory?.ownerUserId === userId) return doc;
 
-            // Use actual user domain when checking SharePermission (not workspace slug)
-            const actualDomain = req.user?.domain || req.userDomain;
+            // Use workspace domain when checking SharePermission (not user domain)
+            const actualDomain = workspaceDomain;
             
             if (userId) {
               const userShare = await SharePermission.findOne({
