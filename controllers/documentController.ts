@@ -233,9 +233,13 @@ export const documentController = {
 
       // Filter documents based on directory access permissions
       // Only show documents from directories the user has access to
-      // Domain admins of the workspace domain see all documents
-      // BUT invited admins from other domains should only see documents in granted directories
-      if (user?.role === "admin" && user.domain === workspaceDomain) {
+      // Same-domain admins of the workspace domain see all documents
+      // BUT cross-domain admins (invited from other domains) should only see documents in granted directories
+      const userDomain = user?.domain;
+      const isSameDomainAdmin = user?.role === "admin" && userDomain && userDomain === workspaceDomain;
+      const isCrossDomainAdmin = user?.role === "admin" && userDomain && userDomain !== workspaceDomain;
+      
+      if (isSameDomainAdmin) {
         return res.json(allDocuments);
       }
 

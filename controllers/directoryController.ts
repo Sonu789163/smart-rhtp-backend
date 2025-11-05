@@ -172,12 +172,18 @@ export const directoryController = {
       const userId = req.user?._id?.toString();
       // Use workspace domain for SharePermission lookups (not user domain)
       const domain = workspaceDomain;
+      
+      // Check if user is a cross-domain admin (invited from another domain)
+      const userDomain = req.user?.domain;
+      const isCrossDomainAdmin = req.user?.role === "admin" && userDomain && userDomain !== workspaceDomain;
+      const isSameDomainAdmin = req.user?.role === "admin" && userDomain === workspaceDomain;
 
       const visibleDirs = await Promise.all(
         allDirs.map(async (dir) => {
-          // Admins can see all directories
-          if (req.user?.role === "admin") return dir;
+          // Same-domain admins can see all directories
+          if (isSameDomainAdmin) return dir;
 
+          // Cross-domain admins should only see directories they have explicit access to
           // Directory owners can see their own directories
           if (dir.ownerUserId === userId) return dir;
 
@@ -228,8 +234,9 @@ export const directoryController = {
 
       // Filter documents based on directory access permissions
       // Only show documents from directories the user has access to
+      // Cross-domain admins should only see documents in directories they have access to
       let docs = allDocs;
-      if (req.user?.role !== "admin") {
+      if (isCrossDomainAdmin || req.user?.role !== "admin") {
         // Check access for each document's directory
         const accessibleDocs = await Promise.all(
           allDocs.map(async (doc) => {
