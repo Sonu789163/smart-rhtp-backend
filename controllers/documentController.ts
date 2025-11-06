@@ -722,7 +722,7 @@ export const documentController = {
       }
       
       const normalizedStatus = status.trim().toLowerCase();
-      console.log(`📥 Received status update for ${identifier}: ${normalizedStatus}`);
+      console.log(`📥 Received status update for ${identifier}: ${normalizedStatus} (type: ${req.body.type || 'unknown'})`);
       
       // Update document status in MongoDB - try multiple lookup methods
       try {
@@ -743,6 +743,18 @@ export const documentController = {
           document = await Document.findById(identifier);
         }
         
+        // Additional lookup: try searching by type if provided (for RHP documents)
+        if (!document && req.body.type) {
+          document = await Document.findOne({ 
+            type: req.body.type,
+            $or: [
+              { id: identifier },
+              { fileKey: identifier },
+              { documentId: identifier }
+            ]
+          });
+        }
+        
         if (document) {
           // Map n8n status to our document status
           let newStatus = document.status; // Default to current status
@@ -760,32 +772,46 @@ export const documentController = {
           const shouldUpdate = oldStatus !== newStatus || (newStatus === "completed" && oldStatus === "processing");
           
           if (shouldUpdate) {
+            // Update using both methods to ensure persistence
             document.status = newStatus;
             await document.save();
-            console.log(`✅ Updated document ${document.id} (${document.name}) status from "${oldStatus}" to "${newStatus}"`);
+            console.log(`✅ Updated document ${document.id} (${document.name}, type: ${document.type}) status from "${oldStatus}" to "${newStatus}"`);
             
-            // Also try to find and update by MongoDB _id to ensure persistence
+            // Also try to find and update by MongoDB _id to ensure persistence (especially for RHP)
             try {
-              await Document.updateOne(
+              const updateResult = await Document.updateOne(
                 { _id: document._id },
                 { $set: { status: newStatus } }
               );
-              console.log(`✅ Confirmed MongoDB update for document ${document.id}`);
+              if (updateResult.modifiedCount > 0) {
+                console.log(`✅ Confirmed MongoDB update for document ${document.id} (type: ${document.type})`);
+              } else {
+                console.log(`ℹ️ MongoDB update confirmed (no changes needed) for document ${document.id} (type: ${document.type})`);
+              }
             } catch (updateError) {
               console.error(`⚠️ Secondary update failed (non-critical):`, updateError);
             }
+            
+            // Verify the update was persisted
+            const verifyDoc = await Document.findById(document._id);
+            if (verifyDoc && verifyDoc.status === newStatus) {
+              console.log(`✅ Verified: Document ${document.id} status is now "${verifyDoc.status}" in database`);
+            } else {
+              console.warn(`⚠️ Warning: Document ${document.id} status verification failed. Expected: "${newStatus}", Got: "${verifyDoc?.status}"`);
+            }
           } else {
-            console.log(`ℹ️ Document ${document.id} status unchanged: "${oldStatus}"`);
+            console.log(`ℹ️ Document ${document.id} (type: ${document.type}) status unchanged: "${oldStatus}"`);
           }
           
           // Use the found document's id for socket emission
           const actualJobId = document.id;
-          io.emit("upload_status", { jobId: actualJobId, status: normalizedStatus, error });
+          io.emit("upload_status", { jobId: actualJobId, status: newStatus, error });
           
           res.status(200).json({
             message: "Upload status update processed",
             jobId: actualJobId,
             documentId: document.id,
+            documentType: document.type,
             status: normalizedStatus,
             previousStatus: oldStatus,
             newStatus: newStatus,
@@ -793,7 +819,7 @@ export const documentController = {
           });
         } else {
           console.warn(`⚠️ Document not found for identifier: ${identifier}`);
-          console.warn(`   Tried: id=${identifier}, documentId=${documentId}, fileKey lookup, _id lookup`);
+          console.warn(`   Tried: id=${identifier}, documentId=${documentId}, fileKey lookup, _id lookup, type-based lookup`);
           
           // Still emit socket event even if document not found (for debugging)
           io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: error || "Document not found" });
