@@ -1092,16 +1092,21 @@ export const documentController = {
       await drhpDoc.save();
       await rhpDoc.save();
 
-      // Publish event for the linking
-      await publishEvent({
-        actorUserId: req.user?._id?.toString?.(),
-        domain: req.userDomain!,
-        action: "documents.linked",
-        resourceType: "document",
-        resourceId: drhpId,
-        title: `Documents linked for comparison: ${drhpDoc.name} ↔ ${rhpDoc.name}`,
-        notifyWorkspace: true,
-      });
+      // Publish event for the linking (wrapped in try-catch to prevent errors from breaking the flow)
+      try {
+        await publishEvent({
+          actorUserId: req.user?._id?.toString?.(),
+          domain: req.userDomain!,
+          action: "documents.linked",
+          resourceType: "document",
+          resourceId: drhpId,
+          title: `Documents linked for comparison: ${drhpDoc.name} ↔ ${rhpDoc.name}`,
+          notifyWorkspace: true,
+        });
+      } catch (eventError) {
+        // Log but don't fail the request - documents are already linked
+        console.error("Error publishing event for document linking:", eventError);
+      }
 
       res.json({
         message: "Documents linked successfully for comparison",
@@ -1170,16 +1175,21 @@ export const documentController = {
         await document.save();
       }
 
-      // Publish event for the unlinking
-      await publishEvent({
-        actorUserId: req.user?._id?.toString?.(),
-        domain: req.userDomain!,
-        action: "documents.unlinked",
-        resourceType: "document",
-        resourceId: document.id,
-        title: `Documents unlinked: ${document.name}`,
-        notifyWorkspace: true,
-      });
+      // Publish event for the unlinking (wrapped in try-catch to prevent errors from breaking the flow)
+      try {
+        await publishEvent({
+          actorUserId: req.user?._id?.toString?.(),
+          domain: req.userDomain!,
+          action: "documents.unlinked",
+          resourceType: "document",
+          resourceId: document.id,
+          title: `Documents unlinked: ${document.name}`,
+          notifyWorkspace: true,
+        });
+      } catch (eventError) {
+        // Log but don't fail the request - documents are already unlinked
+        console.error("Error publishing event for document unlinking:", eventError);
+      }
 
       res.json({
         message: "Documents unlinked successfully",

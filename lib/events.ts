@@ -1,4 +1,3 @@
-import { ActivityLog } from "../models/ActivityLog";
 import { Notification } from "../models/Notification";
 import { User } from "../models/User";
 import { Domain } from "../models/Domain";
@@ -99,25 +98,9 @@ export async function publishEvent(evt: EventPayload) {
     console.warn(`Warning: Could not find domainId for domain "${domain}". Notification may fail validation.`);
   }
   
-  // Create activity log
-  const logData: any = {
-    id: genId("act"),
-    actorUserId,
-    domain,
-    action,
-    resourceType,
-    resourceId,
-    title: title || action,
-    metadata: metadata || {},
-  };
-  
-  // Add domainId if available
-  if (domainId) {
-    logData.domainId = domainId;
-  }
-  
-  const log = new ActivityLog(logData);
-  await log.save();
+  // Note: ActivityLog creation removed from publishEvent
+  // Use auditLogger.logActivity() directly if ActivityLog is needed
+  // publishEvent is now only for creating Notifications
 
   // Determine who to notify
   let userIdsToNotify: string[] = [];
