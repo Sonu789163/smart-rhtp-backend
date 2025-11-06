@@ -44,4 +44,6 @@ router.post("/workspace/users/directories/grant", workspaceInvitationController_
 router.post("/workspace/users/directories/revoke", workspaceInvitationController_1.workspaceInvitationController.revokeDirectoryAccess);
 // Admin: get all directories a user has access to
 router.get("/workspace/users/:userEmail/directories", workspaceInvitationController_1.workspaceInvitationController.getUserDirectories);
+// Admin: retroactively grant directory access from accepted invitation
+router.post("/workspace/retroactively-grant-access", workspaceInvitationController_1.workspaceInvitationController.retroactivelyGrantDirectoryAccess);
 exports.default = router;

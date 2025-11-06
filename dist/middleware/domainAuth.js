@@ -176,13 +176,7 @@ const domainAuthMiddleware = async (req, res, next) => {
                 message: "Workspace not found or you don't have access to it",
             });
         }
-        // Verify workspace belongs to user's domain
-        if (workspace.domain !== user.domain) {
-            return res.status(403).json({
-                message: "Access denied. Workspace does not belong to your domain.",
-            });
-        }
-        // Check if user has membership in this workspace
+        // Check if user has membership in this workspace FIRST (allows cross-domain access)
         const membership = await WorkspaceMembership_1.WorkspaceMembership.findOne({
             userId: user._id,
             workspaceId: workspace.workspaceId,
@@ -196,15 +190,39 @@ const domainAuthMiddleware = async (req, res, next) => {
             const slugMatch = wsDomain === workspaceSlug;
             return (workspaceIdMatch || slugMatch) && ws.isActive !== false;
         });
-        // Also check if user is domain admin (admins have access to all workspaces in their domain)
-        const isDomainAdmin = user.role === "admin";
-        if (!membership && !hasLegacyAccess && !isDomainAdmin) {
-            return res.status(403).json({
-                message: "Access denied. You do not have access to this workspace.",
-            });
+        // Check if user is admin of the workspace's domain (for same-domain admins)
+        const isWorkspaceDomainAdmin = user.role === "admin" && user.domain === workspace.domain;
+        // If user has membership or legacy access, allow them (even if cross-domain)
+        // Or if they are admin of the workspace's domain
+        if (!membership && !hasLegacyAccess && !isWorkspaceDomainAdmin) {
+            // For cross-domain users, only allow if they have explicit membership
+            // This prevents unauthorized cross-domain access
+            if (workspace.domain !== user.domain) {
+                return res.status(403).json({
+                    message: "Access denied. You do not have access to this workspace.",
+                });
+            }
+            // For same-domain users, check if they're domain admin
+            const isDomainAdmin = user.role === "admin";
+            if (!isDomainAdmin) {
+                return res.status(403).json({
+                    message: "Access denied. You do not have access to this workspace.",
+                });
+            }
         }
         // Use workspace.workspaceId (not the requested ID which might be a slug)
         const effectiveWorkspaceId = workspace.workspaceId;
+        // For cross-domain users with membership, we need to allow access to workspace domain data
+        // Set userDomain to workspace domain ONLY for workspace-scoped operations
+        // This allows cross-domain users to access workspace data
+        if (membership && workspace.domain !== user.domain) {
+            // Cross-domain user - use workspace domain for data access in workspace context
+            req.userDomain = workspace.domain;
+        }
+        else {
+            // Same domain or no membership - use user's own domain
+            req.userDomain = user.domain;
+        }
         // Update user's currentWorkspace if different (use workspaceId, not slug)
         if (user.currentWorkspace !== effectiveWorkspaceId) {
             user.currentWorkspace = effectiveWorkspaceId;

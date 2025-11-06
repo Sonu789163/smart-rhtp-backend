@@ -159,7 +159,7 @@ export const workspaceController = {
             const userMembership = new WorkspaceMembership({
               userId: domainUser._id,
               workspaceId: workspace.workspaceId,
-              role: "member",
+              role: "editor",
               invitedBy: user._id,
               joinedAt: new Date(),
               status: "active",
@@ -585,11 +585,11 @@ export const workspaceController = {
             const workspaceId = workspace?.workspaceId || legacyWs.workspaceDomain;
 
             // Map legacy role to membership role
-            let membershipRole: "admin" | "member" | "viewer" = "member";
+            let membershipRole: "admin" | "editor" | "viewer" = "editor";
             if (legacyWs.role === "viewer") {
               membershipRole = "viewer";
             } else if (legacyWs.role === "editor") {
-              membershipRole = "member";
+              membershipRole = "editor";
             }
 
             // Create membership
@@ -660,7 +660,7 @@ export const workspaceController = {
           slug: ws.slug,
           description: ws.description,
           domain: ws.domain,
-          role: membership?.role || "member",
+          role: membership?.role || "editor",
           joinedAt: membership?.joinedAt,
         };
       });

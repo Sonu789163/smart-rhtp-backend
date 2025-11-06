@@ -19,7 +19,19 @@ const sharePermissionSchema = new mongoose.Schema(
 
 sharePermissionSchema.index({ domain: 1, resourceType: 1, resourceId: 1 });
 sharePermissionSchema.index({ scope: 1, principalId: 1 });
-sharePermissionSchema.index({ scope: 1, linkToken: 1 }, { unique: true, sparse: true });
+
+// Compound unique index for user/workspace scoped shares (prevents duplicates)
+// This replaces the problematic sparse index on linkToken
+sharePermissionSchema.index(
+  { domain: 1, resourceType: 1, resourceId: 1, scope: 1, principalId: 1 },
+  { unique: true, sparse: true }
+);
+
+// Unique index for link-scoped shares (linkToken must be unique per scope)
+sharePermissionSchema.index(
+  { scope: 1, linkToken: 1 },
+  { unique: true, sparse: true, partialFilterExpression: { scope: "link", linkToken: { $exists: true } } }
+);
 
 export const SharePermission = mongoose.model("SharePermission", sharePermissionSchema);
 

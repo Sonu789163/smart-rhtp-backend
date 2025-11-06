@@ -183,7 +183,7 @@ export const workspaceRequestController = {
           const membership = new WorkspaceMembership({
             userId: request.userId,
             workspaceId: request.workspaceId,
-            role: "member",
+            role: "editor",
             invitedBy: user._id,
             joinedAt: new Date(),
             status: "active",

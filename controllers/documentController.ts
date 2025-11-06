@@ -280,9 +280,17 @@ export const documentController = {
         return res.status(400).json({ error: "Workspace is required" });
       }
 
+      // Get workspace to find its domain (where documents are stored)
+      const { Workspace } = await import("../models/Workspace");
+      const workspace = await Workspace.findOne({ workspaceId: currentWorkspace });
+      const workspaceDomain = workspace?.domain || req.userDomain;
+      const userDomain = req.user?.domain;
+      const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
+      const isSameDomainAdmin = req.user?.role === "admin" && userDomain === workspaceDomain;
+
       const query: any = {
         id: req.params.id,
-        domain: req.userDomain, // Ensure user can only access documents from their domain
+        domain: workspaceDomain, // Use workspace domain (where documents are stored)
         workspaceId: currentWorkspace, // Ensure user can only access documents from their workspace
       };
 
@@ -301,8 +309,19 @@ export const documentController = {
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
+
+      // For cross-domain users, verify they have access to the document's directory
+      // Same-domain admins have access to all documents
+      if (!isSameDomainAdmin && isCrossDomainUser) {
+        const hasAccess = await documentController.hasDirectoryAccess(req, document.directoryId || null);
+        if (!hasAccess) {
+          return res.status(403).json({ error: "You do not have access to this document" });
+        }
+      }
+
       res.json(document);
     } catch (error) {
+      console.error("Error in getById:", error);
       res.status(500).json({ error: "Failed to fetch document" });
     }
   },
