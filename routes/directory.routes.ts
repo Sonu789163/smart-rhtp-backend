@@ -11,6 +11,10 @@ router.use(authMiddleware);
 router.use(domainAuthMiddleware);
 router.use(linkAccess);
 
+// NEW: Search and duplicate check endpoints (before :id routes)
+router.get("/search", directoryController.search);
+router.post("/check-duplicate", directoryController.checkDuplicate);
+
 router.post("/", requireCreateInDirectory, directoryController.create);
 router.get("/:id", requireDirectoryPermission("id", "viewer"), directoryController.getById);
 router.get("/:id/children", requireDirectoryPermission("id", "viewer"), directoryController.listChildren);

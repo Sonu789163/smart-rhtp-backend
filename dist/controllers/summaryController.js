@@ -50,21 +50,160 @@ const events_1 = require("../lib/events");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.summaryController = {
     async getAll(req, res) {
+        var _a, _b, _c, _d;
         try {
+            const link = req.linkAccess;
             // Get current workspace from request
             const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const domain = req.userDomain || (link === null || link === void 0 ? void 0 : link.domain);
             const query = {
-                domain: req.userDomain, // Filter by user's domain
-                workspaceId: currentWorkspace, // Filter by user's workspace
+                domain: domain, // Use link domain if available, otherwise user domain
+                workspaceId: currentWorkspace,
             };
-            const link = req.linkAccess;
-            // Admins or link access can see all summaries in domain
-            if (!link && req.user && req.user.role !== "admin") {
-                if (req.user.microsoftId) {
-                    query.microsoftId = req.user.microsoftId;
+            // Handle link access
+            if (link) {
+                if (link.resourceType === "document") {
+                    // If link is for a specific document, only show summaries for that document
+                    query.documentId = link.resourceId;
                 }
-                else if (req.user._id) {
-                    query.userId = req.user._id.toString();
+                else if (link.resourceType === "directory") {
+                    // If link is for a directory, show summaries for all documents in that directory
+                    const { Document } = await Promise.resolve().then(() => __importStar(require("../models/Document")));
+                    const documents = await Document.find({
+                        directoryId: link.resourceId,
+                        domain: link.domain,
+                    });
+                    const documentIds = documents.map(doc => doc.id);
+                    if (documentIds.length > 0) {
+                        query.documentId = { $in: documentIds };
+                    }
+                    else {
+                        // No documents in directory, return empty array
+                        return res.json([]);
+                    }
+                }
+                // For link access, don't filter by userId
+            }
+            else {
+                // Check for shared directories via SharePermission
+                const { SharePermission } = await Promise.resolve().then(() => __importStar(require("../models/SharePermission")));
+                const { Document } = await Promise.resolve().then(() => __importStar(require("../models/Document")));
+                const { Directory } = await Promise.resolve().then(() => __importStar(require("../models/Directory")));
+                const userId = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString();
+                const userEmail = (_d = (_c = req.user) === null || _c === void 0 ? void 0 : _c.email) === null || _d === void 0 ? void 0 : _d.toLowerCase();
+                const sharedDirectoryIds = [];
+                // Find all directories shared with this user
+                if (userId) {
+                    const userShares = await SharePermission.find({
+                        resourceType: "directory",
+                        scope: "user",
+                        principalId: userId,
+                    });
+                    sharedDirectoryIds.push(...userShares.map(s => s.resourceId));
+                }
+                if (userEmail) {
+                    const emailShares = await SharePermission.find({
+                        resourceType: "directory",
+                        scope: "user",
+                        invitedEmail: userEmail,
+                    });
+                    sharedDirectoryIds.push(...emailShares.map(s => s.resourceId));
+                }
+                // Also check workspace-scoped shares
+                if (currentWorkspace) {
+                    const workspaceShares = await SharePermission.find({
+                        resourceType: "directory",
+                        scope: "workspace",
+                        principalId: currentWorkspace,
+                    });
+                    sharedDirectoryIds.push(...workspaceShares.map(s => s.resourceId));
+                }
+                // Get all documents from shared directories
+                if (sharedDirectoryIds.length > 0) {
+                    const uniqueDirIds = [...new Set(sharedDirectoryIds)];
+                    // Get documents from all shared directories (across domains/workspaces)
+                    const sharedDocs = await Document.find({
+                        directoryId: { $in: uniqueDirIds },
+                    });
+                    const sharedDocumentIds = sharedDocs.map(doc => doc.id);
+                    // Also check for shared directories created via Directory.isShared
+                    const sharedDirs = await Directory.find({
+                        isShared: true,
+                        sharedWithUserId: userId,
+                        workspaceId: currentWorkspace,
+                    });
+                    for (const sharedDir of sharedDirs) {
+                        if (sharedDir.sharedFromDirectoryId) {
+                            const originalDir = await Directory.findOne({
+                                id: sharedDir.sharedFromDirectoryId,
+                                domain: sharedDir.sharedFromDomain,
+                                workspaceId: sharedDir.sharedFromWorkspaceId,
+                            });
+                            if (originalDir) {
+                                const originalDocs = await Document.find({
+                                    directoryId: originalDir.id,
+                                    domain: originalDir.domain,
+                                    workspaceId: originalDir.workspaceId,
+                                });
+                                sharedDocumentIds.push(...originalDocs.map(doc => doc.id));
+                            }
+                        }
+                    }
+                    // Combine with user's own summaries or all summaries for admins
+                    if (req.user && req.user.role !== "admin") {
+                        // Regular users: show their own summaries + summaries for shared documents
+                        if (sharedDocumentIds.length > 0) {
+                            // Remove domain/workspaceId from base query since we're using $or
+                            delete query.domain;
+                            delete query.workspaceId;
+                            query.$or = [
+                                {
+                                    userId: req.user._id.toString(),
+                                    domain: domain,
+                                    workspaceId: currentWorkspace,
+                                },
+                                { documentId: { $in: sharedDocumentIds } },
+                            ];
+                            if (req.user.microsoftId) {
+                                query.$or.push({
+                                    microsoftId: req.user.microsoftId,
+                                    domain: domain,
+                                    workspaceId: currentWorkspace,
+                                });
+                            }
+                        }
+                        else {
+                            // No shared documents, show only user's own summaries
+                            if (req.user.microsoftId) {
+                                query.microsoftId = req.user.microsoftId;
+                            }
+                            else if (req.user._id) {
+                                query.userId = req.user._id.toString();
+                            }
+                        }
+                    }
+                    else {
+                        // Admins: show all summaries in domain + summaries for shared documents
+                        if (sharedDocumentIds.length > 0) {
+                            // Remove domain/workspaceId from base query since we're using $or
+                            delete query.domain;
+                            delete query.workspaceId;
+                            query.$or = [
+                                { domain: domain, workspaceId: currentWorkspace },
+                                { documentId: { $in: sharedDocumentIds } },
+                            ];
+                        }
+                        // Otherwise, query already has domain and workspaceId, so it will show all
+                    }
+                }
+                else if (req.user && req.user.role !== "admin") {
+                    // No shared directories, show only user's own summaries
+                    if (req.user.microsoftId) {
+                        query.microsoftId = req.user.microsoftId;
+                    }
+                    else if (req.user._id) {
+                        query.userId = req.user._id.toString();
+                    }
                 }
             }
             const summaries = await Summary_1.Summary.find(query).sort({ updatedAt: -1 });
@@ -80,12 +219,20 @@ exports.summaryController = {
             const { documentId } = req.params;
             // Get current workspace from request
             const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const link = req.linkAccess;
             const query = {
                 documentId,
-                domain: req.userDomain, // Filter by user's domain
+                domain: req.userDomain, // Filter by user's domain (or link domain if link access)
                 workspaceId: currentWorkspace, // Filter by user's workspace
             };
-            const link = req.linkAccess;
+            // Handle link access - verify documentId matches link's resourceId
+            if (link && link.resourceType === "document") {
+                if (link.resourceId !== documentId) {
+                    return res.status(403).json({ error: "Access denied to this document" });
+                }
+                // Link access allows viewing summaries for the linked document
+                // Use link's domain (already set by domainAuthMiddleware)
+            }
             // All workspace members can see all summaries in their workspace
             // No user-based filtering needed - workspace isolation is sufficient
             const summaries = await Summary_1.Summary.find(query).sort({
@@ -160,6 +307,20 @@ exports.summaryController = {
             // }
             const summary = new Summary_1.Summary(summaryData);
             await summary.save();
+            // Update directory's updatedAt when summary is created
+            if (documentId) {
+                const { Document } = await Promise.resolve().then(() => __importStar(require("../models/Document")));
+                const { Directory } = await Promise.resolve().then(() => __importStar(require("../models/Directory")));
+                const doc = await Document.findOne({ id: documentId, workspaceId: currentWorkspace });
+                if (doc === null || doc === void 0 ? void 0 : doc.directoryId) {
+                    const now = new Date();
+                    await Directory.updateOne({ id: doc.directoryId, workspaceId: currentWorkspace }, {
+                        $set: {
+                            updatedAt: now,
+                        },
+                    });
+                }
+            }
             // Publish event for workspace notification (only if user context available)
             if (((_a = req.user) === null || _a === void 0 ? void 0 : _a._id) && req.userDomain) {
                 await (0, events_1.publishEvent)({
@@ -199,11 +360,19 @@ exports.summaryController = {
             await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
             // Send DOCX file
             res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-            res.setHeader("Content-Disposition", `attachment; filename="${summary.title || "summary"}.docx"`);
+            res.setHeader("Content-Disposition", `attachment; filename="${(summary.title || "summary").replace(/[^a-z0-9]/gi, "_")}.docx"`);
             res.sendFile(docxPath, async (err) => {
                 // Clean up temp files
-                await (0, promises_1.unlink)(htmlPath);
-                await (0, promises_1.unlink)(docxPath);
+                if (err) {
+                    console.error("Error sending file:", err);
+                }
+                try {
+                    await (0, promises_1.unlink)(htmlPath);
+                    await (0, promises_1.unlink)(docxPath);
+                }
+                catch (cleanupError) {
+                    console.error("Error cleaning up temp files:", cleanupError);
+                }
             });
         }
         catch (error) {
@@ -273,16 +442,25 @@ exports.summaryController = {
     async summaryStatusUpdate(req, res) {
         try {
             const { jobId, status, error } = req.body;
+            console.log("Summary status update received from n8n:", { jobId, status, error });
             if (!jobId || !status) {
+                console.error("Missing jobId or status in summary status update:", { jobId, status });
                 return res.status(400).json({ message: "Missing jobId or status" });
             }
-            // Emit real-time update
-            index_1.io.emit("summary_status", { jobId, status, error });
+            // Emit real-time update to all connected clients
+            const eventData = { jobId, status, error };
+            console.log("Emitting summary_status event:", eventData);
+            index_1.io.emit("summary_status", eventData);
+            // Log if there's an error
+            if (error) {
+                console.error("Summary generation error from n8n:", { jobId, status, error });
+            }
             res
                 .status(200)
                 .json({ message: "Status update emitted", jobId, status, error });
         }
         catch (err) {
+            console.error("Error in summaryStatusUpdate:", err);
             res.status(500).json({
                 message: "Failed to emit status update",
                 error: err instanceof Error ? err.message : err,

@@ -40,23 +40,160 @@ exports.reportController = void 0;
 const Report_1 = require("../models/Report");
 const User_1 = require("../models/User");
 const axios_1 = __importDefault(require("axios"));
-const index_1 = require("../index");
-const events_1 = require("../lib/events");
 const promises_1 = require("fs/promises");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
 const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
+const index_1 = require("../index");
+const events_1 = require("../lib/events");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.reportController = {
     async getAll(req, res) {
+        var _a, _b, _c, _d;
         try {
+            const link = req.linkAccess;
             // Get current workspace from request
             const currentWorkspace = req.currentWorkspace || req.userDomain;
+            const domain = req.userDomain || (link === null || link === void 0 ? void 0 : link.domain);
             const query = {
-                domain: req.userDomain, // Filter by user's domain
-                workspaceId: currentWorkspace, // Filter by user's workspace
+                domain: domain, // Use link domain if available, otherwise user domain
+                workspaceId: currentWorkspace,
             };
+            // Handle link access
+            if (link) {
+                if (link.resourceType === "document") {
+                    // If link is for a specific document, show reports that reference that document
+                    const { Document } = await Promise.resolve().then(() => __importStar(require("../models/Document")));
+                    const document = await Document.findOne({
+                        id: link.resourceId,
+                        domain: link.domain,
+                    });
+                    if (document) {
+                        // Show reports that reference this document as DRHP or RHP
+                        query.$or = [
+                            { drhpId: document.id },
+                            { rhpId: document.id },
+                            { drhpNamespace: document.namespace },
+                            { rhpNamespace: document.namespace || document.rhpNamespace },
+                        ];
+                    }
+                    else {
+                        // Document not found, return empty array
+                        return res.json([]);
+                    }
+                }
+                else if (link.resourceType === "directory") {
+                    // If link is for a directory, show reports for all documents in that directory
+                    const { Document } = await Promise.resolve().then(() => __importStar(require("../models/Document")));
+                    const documents = await Document.find({
+                        directoryId: link.resourceId,
+                        domain: link.domain,
+                    });
+                    const documentIds = documents.map(doc => doc.id);
+                    const documentNamespaces = documents.map(doc => doc.namespace);
+                    if (documentIds.length > 0 || documentNamespaces.length > 0) {
+                        query.$or = [
+                            { drhpId: { $in: documentIds } },
+                            { rhpId: { $in: documentIds } },
+                            { drhpNamespace: { $in: documentNamespaces } },
+                            { rhpNamespace: { $in: documentNamespaces } },
+                        ];
+                    }
+                    else {
+                        // No documents in directory, return empty array
+                        return res.json([]);
+                    }
+                }
+            }
+            else {
+                // Check for shared directories via SharePermission
+                const { SharePermission } = await Promise.resolve().then(() => __importStar(require("../models/SharePermission")));
+                const { Document } = await Promise.resolve().then(() => __importStar(require("../models/Document")));
+                const { Directory } = await Promise.resolve().then(() => __importStar(require("../models/Directory")));
+                const userId = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString();
+                const userEmail = (_d = (_c = req.user) === null || _c === void 0 ? void 0 : _c.email) === null || _d === void 0 ? void 0 : _d.toLowerCase();
+                const sharedDirectoryIds = [];
+                // Find all directories shared with this user
+                if (userId) {
+                    const userShares = await SharePermission.find({
+                        resourceType: "directory",
+                        scope: "user",
+                        principalId: userId,
+                    });
+                    sharedDirectoryIds.push(...userShares.map(s => s.resourceId));
+                }
+                if (userEmail) {
+                    const emailShares = await SharePermission.find({
+                        resourceType: "directory",
+                        scope: "user",
+                        invitedEmail: userEmail,
+                    });
+                    sharedDirectoryIds.push(...emailShares.map(s => s.resourceId));
+                }
+                // Also check workspace-scoped shares
+                if (currentWorkspace) {
+                    const workspaceShares = await SharePermission.find({
+                        resourceType: "directory",
+                        scope: "workspace",
+                        principalId: currentWorkspace,
+                    });
+                    sharedDirectoryIds.push(...workspaceShares.map(s => s.resourceId));
+                }
+                // Get all documents from shared directories
+                if (sharedDirectoryIds.length > 0) {
+                    const uniqueDirIds = [...new Set(sharedDirectoryIds)];
+                    // Get documents from all shared directories (across domains/workspaces)
+                    const sharedDocs = await Document.find({
+                        directoryId: { $in: uniqueDirIds },
+                    });
+                    const sharedDocumentIds = sharedDocs.map(doc => doc.id);
+                    const sharedDocumentNamespaces = sharedDocs.map(doc => doc.namespace);
+                    // Also check for shared directories created via Directory.isShared
+                    const sharedDirs = await Directory.find({
+                        isShared: true,
+                        sharedWithUserId: userId,
+                        workspaceId: currentWorkspace,
+                    });
+                    for (const sharedDir of sharedDirs) {
+                        if (sharedDir.sharedFromDirectoryId) {
+                            const originalDir = await Directory.findOne({
+                                id: sharedDir.sharedFromDirectoryId,
+                                domain: sharedDir.sharedFromDomain,
+                                workspaceId: sharedDir.sharedFromWorkspaceId,
+                            });
+                            if (originalDir) {
+                                const originalDocs = await Document.find({
+                                    directoryId: originalDir.id,
+                                    domain: originalDir.domain,
+                                    workspaceId: originalDir.workspaceId,
+                                });
+                                sharedDocumentIds.push(...originalDocs.map(doc => doc.id));
+                                sharedDocumentNamespaces.push(...originalDocs.map(doc => doc.namespace));
+                            }
+                        }
+                    }
+                    // Include reports for shared documents
+                    if (sharedDocumentIds.length > 0 || sharedDocumentNamespaces.length > 0) {
+                        const sharedReportsQuery = [
+                            { drhpId: { $in: sharedDocumentIds } },
+                            { rhpId: { $in: sharedDocumentIds } },
+                        ];
+                        if (sharedDocumentNamespaces.length > 0) {
+                            sharedReportsQuery.push({ drhpNamespace: { $in: sharedDocumentNamespaces } }, { rhpNamespace: { $in: sharedDocumentNamespaces } });
+                        }
+                        // Combine with workspace reports
+                        // Remove domain/workspaceId from base query since we're using $or
+                        delete query.domain;
+                        delete query.workspaceId;
+                        query.$or = [
+                            { domain: domain, workspaceId: currentWorkspace },
+                            ...sharedReportsQuery,
+                        ];
+                    }
+                }
+                // If no shared directories, query already has domain and workspaceId, so it will show all workspace reports
+            }
             // Visibility: All members of the workspace can see all reports in that workspace.
             // Do not further restrict by userId/microsoftId for reads.
             const reports = await Report_1.Report.find(query).sort({ updatedAt: -1 });
@@ -160,6 +297,20 @@ exports.reportController = {
             };
             const report = new Report_1.Report(reportData);
             await report.save();
+            // Update directory's updatedAt when report is created
+            if (drhpId) {
+                const { Document } = await Promise.resolve().then(() => __importStar(require("../models/Document")));
+                const { Directory } = await Promise.resolve().then(() => __importStar(require("../models/Directory")));
+                const doc = await Document.findOne({ id: drhpId, workspaceId: currentWorkspace });
+                if (doc === null || doc === void 0 ? void 0 : doc.directoryId) {
+                    const now = new Date();
+                    await Directory.updateOne({ id: doc.directoryId, workspaceId: currentWorkspace }, {
+                        $set: {
+                            updatedAt: now,
+                        },
+                    });
+                }
+            }
             // Publish event for workspace notification (only if user context available)
             if (((_a = req.user) === null || _a === void 0 ? void 0 : _a._id) && req.userDomain) {
                 await (0, events_1.publishEvent)({
@@ -217,11 +368,19 @@ exports.reportController = {
             await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
             // Send DOCX file
             res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-            res.setHeader("Content-Disposition", `attachment; filename="${report.title || "report"}.docx"`);
+            res.setHeader("Content-Disposition", `attachment; filename="${(report.title || "report").replace(/[^a-z0-9]/gi, "_")}.docx"`);
             res.sendFile(docxPath, async (err) => {
                 // Clean up temp files
-                await (0, promises_1.unlink)(htmlPath);
-                await (0, promises_1.unlink)(docxPath);
+                if (err) {
+                    console.error("Error sending file:", err);
+                }
+                try {
+                    await (0, promises_1.unlink)(htmlPath);
+                    await (0, promises_1.unlink)(docxPath);
+                }
+                catch (cleanupError) {
+                    console.error("Error cleaning up temp files:", cleanupError);
+                }
             });
         }
         catch (error) {

@@ -7,6 +7,9 @@ import { requireBodyDocumentPermission, requireSummaryPermission } from "../midd
 
 const router = express.Router();
 
+// POST /summary-status/update (for n8n to notify status) - Must be before auth middleware
+router.post("/summary-status/update", summaryController.summaryStatusUpdate);
+
 // Enable link access to summaries of shared documents
 import { linkAccess } from "../middleware/linkAccess";
 router.use(linkAccess);
@@ -37,6 +40,14 @@ router.get("/admin/metrics/count", async (req, res) => {
 // Get summaries for a document
 router.get("/document/:documentId", summaryController.getByDocumentId);
 
+// Trigger summary generation (Python service)
+router.post(
+  "/trigger",
+  rateLimitByWorkspace("summary:trigger", 100, 24 * 60 * 60 * 1000),
+  requireBodyDocumentPermission("documentId", "editor"),
+  summaryController.triggerSummary
+);
+
 // Create new summary (rate limited)
 router.post(
   "/create",
@@ -56,8 +67,5 @@ router.get("/:id/download-docx", summaryController.downloadDocx);
 
 // Download PDF generated from HTML content for a summary
 router.get("/:id/download-html-pdf", summaryController.downloadHtmlPdf);
-
-// POST /summary-status/update (for n8n to notify status)
-router.post("/summary-status/update", summaryController.summaryStatusUpdate);
 
 export default router;

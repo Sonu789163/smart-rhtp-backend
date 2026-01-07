@@ -13,7 +13,20 @@ const domainAuthMiddleware = async (req, res, next) => {
         // Check for link access first
         const linkAccess = req.linkAccess;
         if (linkAccess) {
-            // Set domain from link access
+            // If user is authenticated, check if link domain matches user domain
+            if (req.user) {
+                const user = await User_1.User.findById(req.user._id).select("domain");
+                if (user && user.domain !== linkAccess.domain) {
+                    // Domain mismatch - user cannot access resources from other domains
+                    return res.status(403).json({
+                        message: "You cannot access documents from other domains. Cross-domain access is not allowed.",
+                        code: "DOMAIN_MISMATCH",
+                        userDomain: user.domain,
+                        linkDomain: linkAccess.domain
+                    });
+                }
+            }
+            // Set domain from link access (only if domains match or user is not authenticated)
             req.userDomain = linkAccess.domain;
             req.currentWorkspace = linkAccess.domain;
             return next();
@@ -229,7 +242,13 @@ const domainAuthMiddleware = async (req, res, next) => {
             await user.save();
         }
         // Set workspace context for controllers
-        req.userDomain = user.domain; // Always use actual domain
+        // For cross-domain users with membership, keep req.userDomain as workspace domain (set above)
+        // For same-domain users, use user's domain
+        // This allows cross-domain users to access workspace domain data
+        if (!(membership && workspace.domain !== user.domain)) {
+            // Only override if we didn't set it to workspace domain above
+            req.userDomain = user.domain;
+        }
         req.currentWorkspace = effectiveWorkspaceId; // Use actual workspaceId
         next();
     }

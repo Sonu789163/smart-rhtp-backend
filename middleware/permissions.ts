@@ -55,12 +55,38 @@ async function getUserRoleForDocument(req: any, documentId: string): Promise<Rol
   // Admins are owners
   if (req.user?.role === "admin") return "owner";
   const domain = req.userDomain;
-  const doc = await Document.findOne({ id: documentId, domain });
+  let doc = await Document.findOne({ id: documentId, domain });
+
+  // If not found in current domain, check if it's in a shared directory's original directory
+  if (!doc && req.currentWorkspace) {
+    const { Directory } = await import("../models/Directory");
+    const sharedDirectories = await Directory.find({
+      workspaceId: req.currentWorkspace,
+      isShared: true,
+    });
+
+    for (const sharedDir of sharedDirectories) {
+      if (sharedDir.sharedFromDomain && sharedDir.sharedFromWorkspaceId) {
+        const originalDoc = await Document.findOne({
+          id: documentId,
+          domain: sharedDir.sharedFromDomain,
+          workspaceId: sharedDir.sharedFromWorkspaceId,
+        });
+        if (originalDoc) {
+          if (!sharedDir.sharedFromDirectoryId || originalDoc.directoryId === sharedDir.sharedFromDirectoryId) {
+            doc = originalDoc;
+            break;
+          }
+        }
+      }
+    }
+  }
+
   if (!doc) return "none";
 
   // All workspace members get editor access to documents in their workspace
   const currentWorkspace = req.currentWorkspace || domain;
-  if (doc.workspaceId === currentWorkspace) {
+  if (doc.workspaceId === currentWorkspace && doc.domain === domain) {
     return "editor";
   }
 
@@ -81,16 +107,72 @@ async function getUserRoleForDocument(req: any, documentId: string): Promise<Rol
     }
   }
 
+  // Check if user has access via shared directory
+  if (doc.directoryId && req.currentWorkspace) {
+    const { Directory } = await import("../models/Directory");
+    const { SharePermission } = await import("../models/SharePermission");
+    
+    // Check if there's a shared directory pointing to this document's directory
+    const sharedDir = await Directory.findOne({
+      workspaceId: req.currentWorkspace,
+      sharedFromDirectoryId: doc.directoryId,
+      isShared: true,
+    });
+
+    if (sharedDir) {
+      const userId = req.user?._id?.toString?.();
+      const userEmail = req.user?.email?.toLowerCase();
+      
+      // Check if user is the recipient
+      if (userId && sharedDir.sharedWithUserId === userId) {
+        return "viewer"; // Shared directories typically give viewer access
+      }
+
+      // Check SharePermission for the original directory
+      if (userId) {
+        const userShare = await SharePermission.findOne({
+          domain: doc.domain,
+          resourceType: "directory",
+          resourceId: doc.directoryId,
+          scope: "user",
+          principalId: userId,
+        });
+        if (userShare) return userShare.role as Role;
+      }
+
+      if (userEmail) {
+        const emailShare = await SharePermission.findOne({
+          domain: doc.domain,
+          resourceType: "directory",
+          resourceId: doc.directoryId,
+          scope: "user",
+          invitedEmail: userEmail,
+        });
+        if (emailShare) return emailShare.role as Role;
+      }
+
+      // Check workspace share
+      const wsShare = await SharePermission.findOne({
+        domain: doc.domain,
+        resourceType: "directory",
+        resourceId: doc.directoryId,
+        scope: "workspace",
+        principalId: currentWorkspace,
+      });
+      if (wsShare) return wsShare.role as Role;
+    }
+  }
+
   // Direct share for user
   const userId = req.user?._id?.toString?.();
   if (userId) {
-    const share = await SharePermission.findOne({ domain, resourceType: "document", resourceId: documentId, scope: "user", principalId: userId });
+    const share = await SharePermission.findOne({ domain: doc.domain, resourceType: "document", resourceId: documentId, scope: "user", principalId: userId });
     if (share) return share.role as Role;
   }
 
   // Workspace share
   const workspaceKey = req.currentWorkspace || domain;
-  const wsShare = await SharePermission.findOne({ domain, resourceType: "document", resourceId: documentId, scope: "workspace", principalId: workspaceKey });
+  const wsShare = await SharePermission.findOne({ domain: doc.domain, resourceType: "document", resourceId: documentId, scope: "workspace", principalId: workspaceKey });
   if (wsShare) return wsShare.role as Role;
 
   return "none";

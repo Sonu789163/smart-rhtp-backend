@@ -17,6 +17,8 @@ import shareRoutes from "./routes/share.routes";
 import notificationRoutes from "./routes/notification.routes";
 import workspaceRoutes from "./routes/workspace.routes";
 import workspaceRequestRoutes from "./routes/workspaceRequest.routes";
+import newsCrawlRoutes from "./routes/newsCrawl.routes";
+import newsArticleRoutes from "./routes/newsArticle.routes";
 import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import helmet from "helmet";
@@ -36,13 +38,13 @@ const io = new SocketIOServer(server, {
     origin: function (origin, callback) {
       // Allow requests with no origin
       if (!origin) return callback(null, true);
-      
+
       const allowedOrigins = [
         "https://rhp-document-summarizer.vercel.app",
         "http://localhost:8080",
         "http://localhost:3000",
       ];
-      
+
       if (allowedOrigins.indexOf(origin) !== -1) {
         callback(null, true);
       } else if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
@@ -73,7 +75,7 @@ app.use(
     origin: function (origin, callback) {
       // Allow requests with no origin (like mobile apps or curl requests)
       if (!origin) return callback(null, true);
-      
+
       if (allowedOrigins.indexOf(origin) !== -1) {
         callback(null, true);
       } else {
@@ -87,7 +89,7 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-workspace'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-workspace', 'x-link-token'],
     exposedHeaders: ['Content-Type', 'Authorization'],
     preflightContinue: false,
     optionsSuccessStatus: 204,
@@ -109,16 +111,48 @@ app.use(
 );
 
 // Rate limiting middleware
-const limiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 15 minutes
-  max: 500, // limit each IP to 100 requests per windowMs
-  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+// More lenient rate limiter for GET requests (read operations)
+// This allows bulk data fetching without hitting rate limits
+const readLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute window
+  max: 500, // Allow 500 GET requests per minute per IP (for bulk operations like fetching all reports/summaries)
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many read requests, please try again later',
+  skip: (req) => {
+    // Skip rate limiting for non-GET requests (they'll use writeLimiter)
+    return req.method !== 'GET';
+  },
+  // Use IP-based rate limiting (user auth happens after rate limiting)
+  keyGenerator: (req) => {
+    return req.ip || req.socket.remoteAddress || 'unknown';
+  },
 });
-app.use(limiter);
+
+// Stricter rate limiter for write operations (POST, PUT, DELETE, PATCH)
+const writeLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute window
+  max: 500, // Allow 500 write requests per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many write requests, please try again later',
+  skip: (req) => {
+    // Skip rate limiting for GET requests (they use readLimiter)
+    return req.method === 'GET';
+  },
+  // Use IP-based rate limiting (user auth happens after rate limiting)
+  keyGenerator: (req) => {
+    return req.ip || req.socket.remoteAddress || 'unknown';
+  },
+});
+
+// Apply read limiter to all routes
+app.use(readLimiter);
+// Apply write limiter to all routes
+app.use(writeLimiter);
 
 // MongoDB Connection
-const MONGODB_URI = process.env.MONGODB_URI ;
+const MONGODB_URI = process.env.MONGODB_URI;
 if (!MONGODB_URI) {
   throw new Error("MONGODB_URI is not set");
 }
@@ -170,6 +204,8 @@ app.use("/api/shares", shareRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/workspaces", workspaceRoutes);
 app.use("/api/workspace-requests", workspaceRequestRoutes);
+app.use("/api/news-crawl", newsCrawlRoutes);
+app.use("/api/news-articles", newsArticleRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {

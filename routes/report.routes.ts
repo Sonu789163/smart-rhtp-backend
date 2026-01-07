@@ -24,6 +24,14 @@ router.get("/admin", reportController.getAllAdmin);
 // Get single report
 router.get("/:id", requireReportPermission("id", "viewer"), reportController.getById);
 
+// Trigger document comparison (Python service)
+router.post(
+  "/compare",
+  rateLimitByWorkspace("report:compare", 50, 24 * 60 * 60 * 1000),
+  requireBodyDocumentPermission("drhpId", "editor"),
+  reportController.compareDocuments
+);
+
 // Create new report (rate limited)
 router.post(
   "/create-report",

@@ -21,7 +21,20 @@ export const domainAuthMiddleware = async (
     // Check for link access first
     const linkAccess = (req as any).linkAccess;
     if (linkAccess) {
-      // Set domain from link access
+      // If user is authenticated, check if link domain matches user domain
+      if (req.user) {
+        const user = await User.findById(req.user._id).select("domain");
+        if (user && user.domain !== linkAccess.domain) {
+          // Domain mismatch - user cannot access resources from other domains
+          return res.status(403).json({ 
+            message: "You cannot access documents from other domains. Cross-domain access is not allowed.",
+            code: "DOMAIN_MISMATCH",
+            userDomain: user.domain,
+            linkDomain: linkAccess.domain
+          });
+        }
+      }
+      // Set domain from link access (only if domains match or user is not authenticated)
       req.userDomain = linkAccess.domain;
       req.currentWorkspace = linkAccess.domain;
       return next();

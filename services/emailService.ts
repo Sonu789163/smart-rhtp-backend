@@ -238,6 +238,92 @@ const emailTemplates = {
     `,
     text: `Verify Your Email\n\nYour OTP is ${data.otp}. It expires in ${data.expiresMinutes || 10} minutes. If you did not attempt to register, ignore this email.`,
   }),
+  "directory-share": (data: any) => ({
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Directory Shared with You</title>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: #4B2A06; color: white; padding: 20px; text-align: center; }
+          .content { padding: 30px 20px; background: #f9f9f9; }
+          .button { 
+            display: inline-block; 
+            background: #4B2A06; 
+            color: white; 
+            padding: 12px 30px; 
+            text-decoration: none; 
+            border-radius: 5px; 
+            margin: 20px 0;
+          }
+          .footer { text-align: center; padding: 20px; color: #666; font-size: 14px; }
+          .resource-info { background: white; padding: 20px; border-radius: 5px; margin: 20px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Directory Shared with You</h1>
+          </div>
+          <div class="content">
+            <h2>You've been granted access to a directory!</h2>
+            <p>Hello,</p>
+            <p><strong>${data.sharerName || "A user"}</strong> has shared a ${data.resourceType === "directory" ? "directory" : "document"} with you.</p>
+            
+            <div class="resource-info">
+              <h3>Resource Details:</h3>
+              <p><strong>Name:</strong> ${data.resourceName || data.resourceId}</p>
+              <p><strong>Type:</strong> ${data.resourceType === "directory" ? "Directory" : "Document"}</p>
+              <p><strong>Access Level:</strong> ${data.role}</p>
+              ${data.workspaceName ? `<p><strong>Workspace:</strong> ${data.workspaceName}</p>` : ""}
+            </div>
+            
+            <p>You can now access this ${data.resourceType === "directory" ? "directory" : "document"} in your dashboard.</p>
+            <div style="text-align: center; margin: 20px 0;">
+              <a href="${data.dashboardUrl}" class="button" style="color: white; text-decoration: none;">
+                Go to Dashboard
+              </a>
+            </div>
+            
+            <p>If you don't have an account yet, you'll need to <a href="${data.signupUrl}">sign up</a> first to access the shared resource.</p>
+            
+            <p>If you can't click the button, copy and paste this link into your browser:</p>
+            <a style="word-break: break-all; color: blue; background: #f5f5f5; padding: 10px; border-radius: 3px; display: block; margin-top: 10px;" href="${data.dashboardUrl}">${data.dashboardUrl}</a>
+          </div>
+          <div class="footer">
+            <p>This share was created by ${data.sharerName || "a user"} (${data.sharerDomain || "unknown domain"})</p>
+            <p>If you didn't expect this share, you can safely ignore this email.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+    text: `
+      Directory Shared with You
+      
+      Hello,
+      
+      ${data.sharerName || "A user"} has shared a ${data.resourceType === "directory" ? "directory" : "document"} with you.
+      
+      Resource Details:
+      - Name: ${data.resourceName || data.resourceId}
+      - Type: ${data.resourceType === "directory" ? "Directory" : "Document"}
+      - Access Level: ${data.role}
+      ${data.workspaceName ? `- Workspace: ${data.workspaceName}` : ""}
+      
+      You can now access this ${data.resourceType === "directory" ? "directory" : "document"} in your dashboard.
+      
+      Visit: ${data.dashboardUrl}
+      
+      If you don't have an account yet, you'll need to sign up first to access the shared resource.
+      
+      If you didn't expect this share, you can safely ignore this email.
+    `,
+  }),
 };
 
 export const sendEmail = async (emailData: EmailData): Promise<void> => {

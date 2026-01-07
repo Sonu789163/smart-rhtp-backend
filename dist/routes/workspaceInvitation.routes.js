@@ -46,4 +46,14 @@ router.post("/workspace/users/directories/revoke", workspaceInvitationController
 router.get("/workspace/users/:userEmail/directories", workspaceInvitationController_1.workspaceInvitationController.getUserDirectories);
 // Admin: retroactively grant directory access from accepted invitation
 router.post("/workspace/retroactively-grant-access", workspaceInvitationController_1.workspaceInvitationController.retroactivelyGrantDirectoryAccess);
+// Admin: Get all workspace members
+router.get("/workspace/members", workspaceInvitationController_1.workspaceInvitationController.getWorkspaceMembers);
+// Admin: Update member role
+router.post("/workspace/members/role", workspaceInvitationController_1.workspaceInvitationController.updateMemberRole);
+// Admin: Remove member from workspace
+router.delete("/workspace/members/:userId", workspaceInvitationController_1.workspaceInvitationController.removeWorkspaceMember);
+// Admin: Get member's detailed permissions
+router.get("/workspace/members/:userId/permissions", workspaceInvitationController_1.workspaceInvitationController.getMemberPermissions);
+// Admin: Get activity log for workspace
+router.get("/workspace/activity-log", workspaceInvitationController_1.workspaceInvitationController.getActivityLog);
 exports.default = router;

@@ -43,6 +43,8 @@ const domainAuth_1 = require("../middleware/domainAuth");
 const rateLimitByWorkspace_1 = require("../middleware/rateLimitByWorkspace");
 const permissions_1 = require("../middleware/permissions");
 const router = express_1.default.Router();
+// POST /summary-status/update (for n8n to notify status) - Must be before auth middleware
+router.post("/summary-status/update", summaryController_1.summaryController.summaryStatusUpdate);
 // Enable link access to summaries of shared documents
 const linkAccess_1 = require("../middleware/linkAccess");
 router.use(linkAccess_1.linkAccess);
@@ -80,6 +82,4 @@ router.delete("/:id", summaryController_1.summaryController.delete);
 router.get("/:id/download-docx", summaryController_1.summaryController.downloadDocx);
 // Download PDF generated from HTML content for a summary
 router.get("/:id/download-html-pdf", summaryController_1.summaryController.downloadHtmlPdf);
-// POST /summary-status/update (for n8n to notify status)
-router.post("/summary-status/update", summaryController_1.summaryController.summaryStatusUpdate);
 exports.default = router;
