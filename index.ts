@@ -27,7 +27,7 @@ import { testSmtpConnection } from "./services/emailService";
 
 dotenv.config();
 
-const app = express();
+export const app = express();
 
 // Trust proxy for Render deployment
 app.set('trust proxy', 1);
@@ -157,24 +157,26 @@ if (!MONGODB_URI) {
   throw new Error("MONGODB_URI is not set");
 }
 
-mongoose
-  .connect(MONGODB_URI, {
-    serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
-    socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
-    connectTimeoutMS: 10000, // Give up initial connection after 10s
-    retryWrites: true,
-    retryReads: true,
-  })
-  .then(async () => {
-    console.log("Connected to MongoDB");
-    // Test SMTP connection on startup (non-blocking)
-    testSmtpConnection().catch((err) => {
-      console.error("SMTP test error:", err);
+if (process.env.NODE_ENV !== 'test') {
+  mongoose
+    .connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+      socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+      connectTimeoutMS: 10000, // Give up initial connection after 10s
+      retryWrites: true,
+      retryReads: true,
+    })
+    .then(async () => {
+      console.log("Connected to MongoDB");
+      // Test SMTP connection on startup (non-blocking)
+      testSmtpConnection().catch((err) => {
+        console.error("SMTP test error:", err);
+      });
+    })
+    .catch((error) => {
+      console.error("MongoDB connection error:", error);
     });
-  })
-  .catch((error) => {
-    console.error("MongoDB connection error:", error);
-  });
+}
 
 // Handle MongoDB connection errors after initial connect
 mongoose.connection.on('error', (err) => {
@@ -228,8 +230,10 @@ process.on('SIGPIPE', () => {
   console.log('SIGPIPE received, ignoring...');
 });
 
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
 
 // Allow only your frontend domain
