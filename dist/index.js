@@ -23,6 +23,8 @@ const share_routes_1 = __importDefault(require("./routes/share.routes"));
 const notification_routes_1 = __importDefault(require("./routes/notification.routes"));
 const workspace_routes_1 = __importDefault(require("./routes/workspace.routes"));
 const workspaceRequest_routes_1 = __importDefault(require("./routes/workspaceRequest.routes"));
+const newsCrawl_routes_1 = __importDefault(require("./routes/newsCrawl.routes"));
+const newsArticle_routes_1 = __importDefault(require("./routes/newsArticle.routes"));
 const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
 const helmet_1 = __importDefault(require("helmet"));
@@ -35,35 +37,109 @@ app.set('trust proxy', 1);
 const server = http_1.default.createServer(app);
 const io = new socket_io_1.Server(server, {
     cors: {
-        origin: [
-            "https://rhp-document-summarizer.vercel.app",
-            "http://localhost:8080",
-        ],
+        origin: function (origin, callback) {
+            // Allow requests with no origin
+            if (!origin)
+                return callback(null, true);
+            const allowedOrigins = [
+                "https://rhp-document-summarizer.vercel.app",
+                "http://localhost:8080",
+                "http://localhost:3000",
+            ];
+            if (allowedOrigins.indexOf(origin) !== -1) {
+                callback(null, true);
+            }
+            else if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+                callback(null, true);
+            }
+            else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
         credentials: true,
+        methods: ['GET', 'POST'],
     },
 });
 exports.io = io;
 const PORT = process.env.PORT || 5000;
-// Middleware
+// CORS configuration - must be before other middleware
+const allowedOrigins = [
+    "https://rhp-document-summarizer.vercel.app",
+    "http://localhost:8080",
+    "http://localhost:3000",
+];
 app.use((0, cors_1.default)({
-    origin: [
-        "https://rhp-document-summarizer.vercel.app",
-        "http://localhost:8080",
-    ],
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin)
+            return callback(null, true);
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        }
+        else {
+            // For development, allow any localhost origin
+            if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+                callback(null, true);
+            }
+            else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        }
+    },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-workspace', 'x-link-token'],
+    exposedHeaders: ['Content-Type', 'Authorization'],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
 }));
+// Handle preflight requests explicitly
+app.options('*', (0, cors_1.default)());
 app.use(express_1.default.json());
 app.use(passport_1.default.initialize());
-// Security middleware
-app.use((0, helmet_1.default)());
+// Security middleware - configure helmet to work with CORS
+app.use((0, helmet_1.default)({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginEmbedderPolicy: false,
+}));
 // Rate limiting middleware
-const limiter = (0, express_rate_limit_1.default)({
-    windowMs: 1 * 60 * 1000, // 15 minutes
-    max: 500, // limit each IP to 100 requests per windowMs
-    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+// More lenient rate limiter for GET requests (read operations)
+// This allows bulk data fetching without hitting rate limits
+const readLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 1000, // 1 minute window
+    max: 500, // Allow 500 GET requests per minute per IP (for bulk operations like fetching all reports/summaries)
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: 'Too many read requests, please try again later',
+    skip: (req) => {
+        // Skip rate limiting for non-GET requests (they'll use writeLimiter)
+        return req.method !== 'GET';
+    },
+    // Use IP-based rate limiting (user auth happens after rate limiting)
+    keyGenerator: (req) => {
+        return req.ip || req.socket.remoteAddress || 'unknown';
+    },
 });
-app.use(limiter);
+// Stricter rate limiter for write operations (POST, PUT, DELETE, PATCH)
+const writeLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 1000, // 1 minute window
+    max: 500, // Allow 500 write requests per minute per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: 'Too many write requests, please try again later',
+    skip: (req) => {
+        // Skip rate limiting for GET requests (they use readLimiter)
+        return req.method === 'GET';
+    },
+    // Use IP-based rate limiting (user auth happens after rate limiting)
+    keyGenerator: (req) => {
+        return req.ip || req.socket.remoteAddress || 'unknown';
+    },
+});
+// Apply read limiter to all routes
+app.use(readLimiter);
+// Apply write limiter to all routes
+app.use(writeLimiter);
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI;
 if (!MONGODB_URI) {
@@ -112,6 +188,8 @@ app.use("/api/shares", share_routes_1.default);
 app.use("/api/notifications", notification_routes_1.default);
 app.use("/api/workspaces", workspace_routes_1.default);
 app.use("/api/workspace-requests", workspaceRequest_routes_1.default);
+app.use("/api/news-crawl", newsCrawl_routes_1.default);
+app.use("/api/news-articles", newsArticle_routes_1.default);
 // Health check endpoint
 app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });

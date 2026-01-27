@@ -13,6 +13,9 @@ const router = express_1.default.Router();
 router.use(auth_1.authMiddleware);
 router.use(domainAuth_1.domainAuthMiddleware);
 router.use(linkAccess_1.linkAccess);
+// NEW: Search and duplicate check endpoints (before :id routes)
+router.get("/search", directoryController_1.directoryController.search);
+router.post("/check-duplicate", directoryController_1.directoryController.checkDuplicate);
 router.post("/", permissions_1.requireCreateInDirectory, directoryController_1.directoryController.create);
 router.get("/:id", (0, permissions_1.requireDirectoryPermission)("id", "viewer"), directoryController_1.directoryController.getById);
 router.get("/:id/children", (0, permissions_1.requireDirectoryPermission)("id", "viewer"), directoryController_1.directoryController.listChildren);

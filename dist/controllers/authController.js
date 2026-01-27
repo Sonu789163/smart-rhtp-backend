@@ -40,6 +40,7 @@ exports.authController = void 0;
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const User_1 = require("../models/User");
+const SharePermission_1 = require("../models/SharePermission");
 const nodemailer_1 = __importDefault(require("nodemailer"));
 const crypto_1 = __importDefault(require("crypto"));
 const domainConfig_1 = require("../config/domainConfig");
@@ -73,6 +74,138 @@ const generateTokens = async (user) => {
     user.refreshTokens.push(refreshToken);
     await user.save();
     return { accessToken, refreshToken };
+};
+// Helper to link SharePermissions by email to user ID when user logs in
+const linkSharePermissionsToUser = async (user) => {
+    var _a;
+    try {
+        const userEmail = (_a = user.email) === null || _a === void 0 ? void 0 : _a.toLowerCase();
+        const userId = user._id.toString();
+        if (!userEmail)
+            return;
+        // Find all SharePermissions that have this email but no principalId
+        const sharesToUpdate = await SharePermission_1.SharePermission.find({
+            invitedEmail: userEmail,
+            scope: "user",
+            $or: [
+                { principalId: null },
+                { principalId: { $exists: false } },
+                { principalId: "" }
+            ]
+        });
+        if (sharesToUpdate.length > 0) {
+            console.log(`[linkSharePermissionsToUser] Found ${sharesToUpdate.length} SharePermissions to link for user ${userEmail}`);
+            // Update each SharePermission to include the user ID
+            for (const share of sharesToUpdate) {
+                try {
+                    // Use updateOne to avoid duplicate key errors
+                    await SharePermission_1.SharePermission.updateOne({ id: share.id }, {
+                        $set: {
+                            principalId: userId,
+                            // Keep the invitedEmail for backward compatibility
+                        }
+                    });
+                    console.log(`[linkSharePermissionsToUser] ✓ Linked SharePermission ${share.id} to user ${userId}`);
+                    // If this is a directory share, create directory in recipient's workspace
+                    if (share.resourceType === "directory") {
+                        await createSharedDirectoryForUser(user, share);
+                    }
+                }
+                catch (updateError) {
+                    // If update fails due to duplicate key, try to find and update existing
+                    console.error(`[linkSharePermissionsToUser] Error updating share ${share.id}:`, updateError.message);
+                }
+            }
+        }
+        // Also check for existing SharePermissions with principalId and create directories if needed
+        const existingShares = await SharePermission_1.SharePermission.find({
+            principalId: userId,
+            resourceType: "directory",
+            scope: "user"
+        });
+        for (const share of existingShares) {
+            await createSharedDirectoryForUser(user, share);
+        }
+    }
+    catch (error) {
+        console.error("[linkSharePermissionsToUser] Error linking SharePermissions:", error);
+        // Don't throw - this is a background task
+    }
+};
+// Helper to create shared directory in recipient's workspace
+const createSharedDirectoryForUser = async (user, share) => {
+    try {
+        const { Directory } = await Promise.resolve().then(() => __importStar(require("../models/Directory")));
+        const { Workspace } = await Promise.resolve().then(() => __importStar(require("../models/Workspace")));
+        const { WorkspaceMembership } = await Promise.resolve().then(() => __importStar(require("../models/WorkspaceMembership")));
+        // Get recipient's workspace
+        let recipientWorkspaceId = user.currentWorkspace;
+        if (!recipientWorkspaceId) {
+            const firstMembership = await WorkspaceMembership.findOne({
+                userId: user._id,
+                status: "active"
+            }).sort({ joinedAt: 1 });
+            if (firstMembership) {
+                recipientWorkspaceId = firstMembership.workspaceId;
+            }
+            else {
+                const defaultWorkspace = await Workspace.findOne({
+                    domain: user.domain,
+                    status: "active"
+                }).sort({ createdAt: 1 });
+                if (defaultWorkspace) {
+                    recipientWorkspaceId = defaultWorkspace.workspaceId;
+                }
+            }
+        }
+        if (!recipientWorkspaceId) {
+            console.log(`[createSharedDirectoryForUser] No workspace found for user ${user.email}, skipping directory creation`);
+            return;
+        }
+        // Check if shared directory already exists
+        const existingSharedDir = await Directory.findOne({
+            sharedFromDirectoryId: share.resourceId,
+            sharedWithUserId: user._id.toString(),
+            workspaceId: recipientWorkspaceId,
+        });
+        if (existingSharedDir) {
+            return; // Already exists
+        }
+        // Get original directory
+        const originalDirectory = await Directory.findOne({
+            id: share.resourceId,
+            domain: share.domain
+        });
+        if (!originalDirectory) {
+            console.log(`[createSharedDirectoryForUser] Original directory ${share.resourceId} not found`);
+            return;
+        }
+        // Create shared directory in recipient's workspace
+        const sharedDirectoryId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const sharedDirectory = new Directory({
+            id: sharedDirectoryId,
+            name: originalDirectory.name,
+            normalizedName: originalDirectory.normalizedName || originalDirectory.name.toLowerCase().trim(),
+            parentId: null,
+            domain: user.domain,
+            domainId: user.domainId,
+            workspaceId: recipientWorkspaceId,
+            ownerUserId: user._id.toString(),
+            documentCount: 0,
+            drhpCount: 0,
+            rhpCount: 0,
+            sharedFromDirectoryId: share.resourceId,
+            sharedFromDomain: share.domain,
+            sharedFromWorkspaceId: originalDirectory.workspaceId,
+            sharedWithUserId: user._id.toString(),
+            isShared: true,
+        });
+        await sharedDirectory.save();
+        console.log(`✅ Created shared directory ${sharedDirectoryId} in workspace ${recipientWorkspaceId} for user ${user.email}`);
+    }
+    catch (error) {
+        console.error("[createSharedDirectoryForUser] Error creating shared directory:", error);
+    }
 };
 exports.authController = {
     // Register a new user (with email OTP verification)
@@ -161,6 +294,8 @@ exports.authController = {
             user.registrationOTP = undefined;
             user.registrationOTPExpires = undefined;
             await user.save();
+            // Link SharePermissions by email to user ID (for cross-domain shares)
+            await linkSharePermissionsToUser(user);
             // Publish event for workspace notification
             await (0, events_1.publishEvent)({
                 actorUserId: user._id.toString(),
@@ -200,6 +335,9 @@ exports.authController = {
                 return res.status(400).json({ message: "Invalid credentials" });
             }
             user.lastLogin = new Date();
+            await user.save();
+            // Link SharePermissions by email to user ID (for cross-domain shares)
+            await linkSharePermissionsToUser(user);
             const tokens = await generateTokens(user);
             res.json(tokens);
         }

@@ -20,8 +20,8 @@ const workspaceMembershipSchema = new mongoose_1.default.Schema({
     },
     role: {
         type: String,
-        enum: ["admin", "member", "viewer"],
-        default: "member",
+        enum: ["admin", "editor", "viewer"], // Changed "member" to "editor" for consistency
+        default: "editor",
         required: true,
     },
     invitedBy: {

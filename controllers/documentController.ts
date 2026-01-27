@@ -9,6 +9,7 @@ import { io } from "../index";
 import { r2Client, R2_BUCKET } from "../config/r2";
 import { publishEvent } from "../lib/events";
 import { GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Summary } from "../models/Summary";
 import { Report } from "../models/Report";
 import { Chat } from "../models/Chat";
@@ -35,6 +36,16 @@ export const documentController = {
     return s;
   },
 
+  // Helper to generate a pre-signed URL for a file in R2
+  async getPresignedUrl(fileKey: string): Promise<string> {
+    const command = new GetObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: fileKey,
+    });
+    // URL expires in 1 hour
+    return await getSignedUrl(r2Client, command, { expiresIn: 3600 });
+  },
+
   // Helper to check if user has access to a directory
   async hasDirectoryAccess(
     req: AuthRequest,
@@ -43,14 +54,14 @@ export const documentController = {
     try {
       const user = req.user;
       const userId = user?._id?.toString();
-      
+
       // Get the workspace domain - for cross-domain users, req.userDomain is set to workspace domain by middleware
       // For same-domain users, req.userDomain equals user.domain
       const workspaceDomain = req.userDomain || req.user?.domain;
       const userDomain = user?.domain;
       const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
       const isSameDomainAdmin = user?.role === "admin" && userDomain === workspaceDomain;
-      
+
       // Same-domain admins of the workspace domain have access to all directories
       if (isSameDomainAdmin) {
         return true;
@@ -65,18 +76,143 @@ export const documentController = {
 
       // Check if user owns the directory - use workspace domain for directory lookup
       // Cross-domain users won't own directories in other domains, so skip this check
-      const directory = await Directory.findOne({
+      let directory = await Directory.findOne({
         id: directoryId,
         domain: workspaceDomain, // Use workspace domain, not user domain
       });
 
-      if (!directory) return false;
+      // If not found in workspace domain, also check if it's a shared directory
+      if (!directory) {
+        directory = await Directory.findOne({
+          id: directoryId,
+          workspaceId: req.currentWorkspace,
+        });
+      }
+
+      if (!directory) {
+        // Check if this directoryId is the original directory of a shared directory
+        // that the user has access to in their current workspace
+        if (req.currentWorkspace) {
+          const sharedDir = await Directory.findOne({
+            workspaceId: req.currentWorkspace,
+            sharedFromDirectoryId: directoryId,
+            isShared: true,
+          });
+
+          if (sharedDir) {
+            // User has access to a shared directory that points to this original directory
+            // Check if they have permission to access the original directory (SharePermission is on the original)
+            const userEmail = user?.email?.toLowerCase();
+
+            // First check if user is the direct recipient of the shared directory
+            if (userId && sharedDir.sharedWithUserId === userId) {
+              return true;
+            }
+
+            // Get the original directory to check its domain
+            const originalDirectory = await Directory.findOne({
+              id: directoryId,
+            });
+
+            if (originalDirectory) {
+              // Check SharePermission for the original directory (not the shared directory)
+              // SharePermission is stored on the original directory in the original domain
+              const { SharePermission } = await import("../models/SharePermission");
+
+              // Check user-scoped share permission (by userId)
+              if (userId) {
+                const userShare = await SharePermission.findOne({
+                  domain: originalDirectory.domain,
+                  resourceType: "directory",
+                  resourceId: directoryId, // Original directory ID
+                  scope: "user",
+                  principalId: userId,
+                });
+                if (userShare) return true;
+              }
+
+              // Check user-scoped share permission (by email) - important for cross-domain sharing
+              if (userEmail) {
+                const emailShare = await SharePermission.findOne({
+                  domain: originalDirectory.domain,
+                  resourceType: "directory",
+                  resourceId: directoryId, // Original directory ID
+                  scope: "user",
+                  invitedEmail: userEmail,
+                });
+                if (emailShare) return true;
+              }
+
+              // Check workspace-scoped share permission
+              // Try both the current workspace and the original workspace
+              const currentWorkspaceKey = req.currentWorkspace;
+              if (currentWorkspaceKey) {
+                const wsShare = await SharePermission.findOne({
+                  domain: originalDirectory.domain,
+                  resourceType: "directory",
+                  resourceId: directoryId, // Original directory ID
+                  scope: "workspace",
+                  principalId: currentWorkspaceKey,
+                });
+                if (wsShare) return true;
+              }
+
+              // Also try the original workspace (in case it was shared to the original workspace)
+              if (originalDirectory.workspaceId) {
+                const originalWsShare = await SharePermission.findOne({
+                  domain: originalDirectory.domain,
+                  resourceType: "directory",
+                  resourceId: directoryId,
+                  scope: "workspace",
+                  principalId: originalDirectory.workspaceId,
+                });
+                if (originalWsShare) return true;
+              }
+            }
+          }
+        }
+        return false;
+      }
+
+      // If this is a shared directory, check access to the original directory
+      if (directory.isShared && directory.sharedFromDirectoryId) {
+        const originalDirectoryId = directory.sharedFromDirectoryId;
+        const originalDirectory = await Directory.findOne({
+          id: originalDirectoryId,
+        });
+
+        if (originalDirectory) {
+          // Check SharePermission for the original directory
+          const userEmail = user?.email?.toLowerCase();
+          if (userId) {
+            const userShare = await SharePermission.findOne({
+              domain: originalDirectory.domain,
+              resourceType: "directory",
+              resourceId: originalDirectoryId,
+              scope: "user",
+              principalId: userId,
+            });
+            if (userShare) return true;
+          }
+          if (userEmail) {
+            const emailShare = await SharePermission.findOne({
+              domain: originalDirectory.domain,
+              resourceType: "directory",
+              resourceId: originalDirectoryId,
+              scope: "user",
+              invitedEmail: userEmail,
+            });
+            if (emailShare) return true;
+          }
+        }
+      }
 
       // Only check ownership for same-domain users
       if (!isCrossDomainUser && directory.ownerUserId === userId) return true;
 
       // Check user-scoped share permission (this is the key for cross-domain users)
       // SharePermission uses the workspace domain (where the directory exists)
+      const userEmail = user?.email?.toLowerCase();
       if (userId) {
         const userShare = await SharePermission.findOne({
           domain: workspaceDomain,
@@ -86,6 +222,17 @@ export const documentController = {
           principalId: userId,
         });
         if (userShare) return true;
+      }
+      // Also check by email for cross-domain sharing
+      if (userEmail) {
+        const emailShare = await SharePermission.findOne({
+          domain: workspaceDomain,
+          resourceType: "directory",
+          resourceId: directoryId,
+          scope: "user",
+          invitedEmail: userEmail,
+        });
+        if (emailShare) return true;
       }
 
       // Check workspace-scoped share permission
@@ -112,6 +259,24 @@ export const documentController = {
         directoryId?: string;
         includeDeleted?: string;
       };
+
+      // Handle link access
+      const linkAccess = (req as any).linkAccess;
+      let effectiveDirectoryId = directoryId;
+
+      // If link is for a directory and no directoryId is provided, use the link's directory
+      if (linkAccess && linkAccess.resourceType === "directory" && !directoryId) {
+        effectiveDirectoryId = linkAccess.resourceId;
+      }
+      // If link is for a document, only return that document
+      if (linkAccess && linkAccess.resourceType === "document") {
+        const document = await Document.findOne({
+          id: linkAccess.resourceId,
+          domain: linkAccess.domain,
+        });
+        return res.json(document ? [document] : []);
+      }
+
       // Get current workspace from request
       // Workspace is required - domainAuth middleware ensures req.currentWorkspace is set
       const currentWorkspace = req.currentWorkspace;
@@ -125,16 +290,96 @@ export const documentController = {
       // For cross-domain users, req.userDomain should be set to the workspace domain by middleware
       // But if not, we need to get it from the workspace
       const userHomeDomain = req.user?.domain || req.userDomain;
-      
+
       // Get workspace to find its domain
       const { Workspace } = await import("../models/Workspace");
       const workspace = await Workspace.findOne({ workspaceId: currentWorkspace });
       const workspaceDomain = workspace?.domain || userHomeDomain; // Domain where workspace exists
 
-      const query: any = {
-        domain: workspaceDomain, // Use workspace domain (where documents are stored)
-        workspaceId: currentWorkspace, // Filter by workspace - required
-      };
+      // Check if this is a shared directory first (before building query)
+      let originalDirectoryId = effectiveDirectoryId;
+      let sharedDirectoryInfo = null;
+
+      if (effectiveDirectoryId && effectiveDirectoryId !== "root") {
+        const { Directory } = await import("../models/Directory");
+        const directory = await Directory.findOne({
+          id: effectiveDirectoryId,
+          workspaceId: currentWorkspace,
+        });
+
+        // If it's a shared directory, also get documents from the original directory
+        if (directory?.isShared && directory.sharedFromDirectoryId) {
+          sharedDirectoryInfo = directory;
+          originalDirectoryId = directory.sharedFromDirectoryId;
+        } else if (linkAccess && linkAccess.resourceType === "directory") {
+          // If accessing via link and directory not found in current workspace,
+          // check if the link's resourceId matches the requested directoryId
+          if (linkAccess.resourceId === effectiveDirectoryId) {
+            // Link is for this directory - get the original directory to find its workspace
+            const originalDir = await Directory.findOne({
+              id: effectiveDirectoryId,
+              domain: linkAccess.domain,
+            });
+            if (originalDir) {
+              sharedDirectoryInfo = {
+                sharedFromDirectoryId: effectiveDirectoryId,
+                sharedFromDomain: linkAccess.domain,
+                sharedFromWorkspaceId: originalDir.workspaceId,
+              };
+              originalDirectoryId = effectiveDirectoryId;
+            }
+          } else {
+            // Check if there's a shared directory pointing to this directory
+            const sharedDir = await Directory.findOne({
+              workspaceId: currentWorkspace,
+              sharedFromDirectoryId: effectiveDirectoryId,
+              isShared: true,
+            });
+            if (sharedDir) {
+              sharedDirectoryInfo = sharedDir;
+              originalDirectoryId = effectiveDirectoryId;
+            }
+          }
+        }
+      } else if (linkAccess && linkAccess.resourceType === "directory" && !effectiveDirectoryId) {
+        // If no directoryId provided but link is for a directory, use the link's directory
+        effectiveDirectoryId = linkAccess.resourceId;
+        const originalDir = await Directory.findOne({
+          id: linkAccess.resourceId,
+          domain: linkAccess.domain,
+        });
+        if (originalDir) {
+          sharedDirectoryInfo = {
+            sharedFromDirectoryId: linkAccess.resourceId,
+            sharedFromDomain: linkAccess.domain,
+            sharedFromWorkspaceId: originalDir.workspaceId,
+          };
+          originalDirectoryId = linkAccess.resourceId;
+        }
+      }
+
+      // Build query - for shared directories, we need to query across domains/workspaces
+      const query: any = {};
+
+      if (sharedDirectoryInfo) {
+        // For shared directories, query documents from both the shared directory and original directory
+        query.$or = [
+          {
+            domain: workspaceDomain,
+            workspaceId: currentWorkspace,
+            directoryId: effectiveDirectoryId, // Documents created in recipient's workspace
+          },
+          {
+            domain: sharedDirectoryInfo.sharedFromDomain,
+            workspaceId: sharedDirectoryInfo.sharedFromWorkspaceId,
+            directoryId: originalDirectoryId, // Original documents
+          },
+        ];
+      } else {
+        // Normal query - use workspace domain and workspace
+        query.domain = workspaceDomain;
+        query.workspaceId = currentWorkspace;
+      }
 
       // If a type filter is provided, use it
       if (type === "DRHP" || type === "RHP") {
@@ -145,8 +390,8 @@ export const documentController = {
       const user = (req as any).user;
       const wsEntry = Array.isArray(user?.accessibleWorkspaces)
         ? user.accessibleWorkspaces.find(
-            (w: any) => w.workspaceDomain === req.userDomain && w.isActive
-          )
+          (w: any) => w.workspaceDomain === req.userDomain && w.isActive
+        )
         : undefined;
 
       // Default to all if no entry found (backward compatibility)
@@ -214,13 +459,30 @@ export const documentController = {
         const extraDocsQuery = { id: { $in: wsEntry.extraDocumentIds } };
 
         if (query.uploadedAt) {
-          // If we have time filtering, use $or to include both time-filtered docs and extra docs
-          query.$or = [{ uploadedAt: query.uploadedAt }, extraDocsQuery];
-          delete query.uploadedAt; // Remove the direct time filter since we're using $or
+          // If we have time filtering, we need to combine it with existing $or (if any)
+          if (query.$or) {
+            // We have a shared directory $or, need to combine with time filter and extra docs
+            // Use $and to combine: (shared directory $or) AND (time filter OR extra docs)
+            query.$and = [
+              { $or: query.$or },
+              { $or: [{ uploadedAt: query.uploadedAt }, extraDocsQuery] }
+            ];
+            delete query.$or;
+            delete query.uploadedAt;
+          } else {
+            // No existing $or, just combine time filter with extra docs
+            query.$or = [{ uploadedAt: query.uploadedAt }, extraDocsQuery];
+            delete query.uploadedAt;
+          }
         } else {
-          // No time filtering, just add extra docs
-          query.$or = query.$or || [];
-          query.$or.push(extraDocsQuery);
+          // No time filtering
+          if (query.$or) {
+            // We have a shared directory $or, add extra docs to it
+            query.$or.push(extraDocsQuery);
+          } else {
+            // No existing $or, just add extra docs
+            query.$or = [extraDocsQuery];
+          }
         }
       }
 
@@ -228,10 +490,17 @@ export const documentController = {
         query.id = { $nin: wsEntry.blockedDocumentIds };
       }
 
-      if (directoryId === "root") {
-        query.directoryId = null;
-      } else if (typeof directoryId === "string") {
-        query.directoryId = directoryId;
+      // Set directoryId filter (if not already set in $or for shared directories)
+      if (effectiveDirectoryId === "root") {
+        if (sharedDirectoryInfo) {
+          // For root in shared context, this shouldn't happen, but handle it
+          query.directoryId = null;
+        } else {
+          query.directoryId = null;
+        }
+      } else if (typeof effectiveDirectoryId === "string" && !sharedDirectoryInfo) {
+        // Only set directoryId if we didn't already set it in $or above
+        query.directoryId = effectiveDirectoryId;
       }
 
       // no trash filter; return all in directory
@@ -242,10 +511,15 @@ export const documentController = {
       // Only show documents from directories the user has access to
       // Same-domain admins of the workspace domain see all documents
       // BUT cross-domain users (both admin and regular, invited from other domains) should only see documents in granted directories
+      // Link access bypasses directory access checks
+      if (linkAccess) {
+        return res.json(allDocuments);
+      }
+
       const userDomain = user?.domain;
       const isSameDomainAdmin = user?.role === "admin" && userDomain && userDomain === workspaceDomain;
       const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
-      
+
       if (isSameDomainAdmin) {
         return res.json(allDocuments);
       }
@@ -253,7 +527,20 @@ export const documentController = {
       // Filter documents: only include those whose parent directory user has access to
       const accessibleDocuments = await Promise.all(
         allDocuments.map(async (doc) => {
-          // Check if user has access to the document's parent directory
+          // If viewing a shared directory, allow documents from the original directory
+          if (sharedDirectoryInfo && doc.directoryId === originalDirectoryId) {
+            // User has access to the shared directory, so they can see documents from the original
+            return doc;
+          }
+
+          // For documents in the shared directory itself (created in recipient's workspace)
+          if (sharedDirectoryInfo && doc.directoryId === effectiveDirectoryId) {
+            // Check access to the shared directory
+            const hasAccess = await documentController.hasDirectoryAccess(req, effectiveDirectoryId);
+            return hasAccess ? doc : null;
+          }
+
+          // For normal directories, check access normally
           const hasAccess = await documentController.hasDirectoryAccess(req, doc.directoryId || null);
           return hasAccess ? doc : null;
         })
@@ -288,34 +575,81 @@ export const documentController = {
       const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
       const isSameDomainAdmin = req.user?.role === "admin" && userDomain === workspaceDomain;
 
-      const query: any = {
-        id: req.params.id,
-        domain: workspaceDomain, // Use workspace domain (where documents are stored)
-        workspaceId: currentWorkspace, // Ensure user can only access documents from their workspace
-      };
-
-      // Check for link access
+      // Check for link access first
       const linkAccess = (req as any).linkAccess;
+      let document = null;
+
       if (
         linkAccess &&
         linkAccess.resourceType === "document" &&
         linkAccess.resourceId === req.params.id
       ) {
         // Allow access via link token
-        query.domain = linkAccess.domain;
+        document = await Document.findOne({
+          id: req.params.id,
+          domain: linkAccess.domain,
+        });
       }
 
-      const document = await Document.findOne(query);
+      // If not found via link, try current workspace/domain
+      if (!document) {
+        document = await Document.findOne({
+          id: req.params.id,
+          domain: workspaceDomain,
+          workspaceId: currentWorkspace,
+        });
+      }
+
+      // If still not found, check if it's in a shared directory's original directory
+      if (!document) {
+        const { Directory } = await import("../models/Directory");
+        // Find all shared directories in current workspace that might contain this document
+        const sharedDirectories = await Directory.find({
+          workspaceId: currentWorkspace,
+          isShared: true,
+        });
+
+        // Try to find the document in original directories
+        for (const sharedDir of sharedDirectories) {
+          if (sharedDir.sharedFromDomain && sharedDir.sharedFromWorkspaceId) {
+            // Search in original domain/workspace
+            const originalDoc = await Document.findOne({
+              id: req.params.id,
+              domain: sharedDir.sharedFromDomain,
+              workspaceId: sharedDir.sharedFromWorkspaceId,
+            });
+            if (originalDoc) {
+              // If we have a specific shared directory ID, verify the document is in that directory
+              // Otherwise, allow any document in the original workspace (access will be checked later)
+              if (!sharedDir.sharedFromDirectoryId || originalDoc.directoryId === sharedDir.sharedFromDirectoryId) {
+                document = originalDoc;
+                break;
+              }
+            }
+          }
+        }
+      }
+
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
 
-      // For cross-domain users, verify they have access to the document's directory
+      // Check access to the document's directory
       // Same-domain admins have access to all documents
-      if (!isSameDomainAdmin && isCrossDomainUser) {
-        const hasAccess = await documentController.hasDirectoryAccess(req, document.directoryId || null);
-        if (!hasAccess) {
-          return res.status(403).json({ error: "You do not have access to this document" });
+      if (!isSameDomainAdmin) {
+        // For same-domain users in the same workspace, allow access
+        // (they should have access to documents in their workspace)
+        const isSameDomainSameWorkspace =
+          !isCrossDomainUser &&
+          document.workspaceId === currentWorkspace &&
+          document.domain === workspaceDomain;
+
+        if (!isSameDomainSameWorkspace) {
+          // For cross-domain users or documents from different workspaces, check directory access
+          const hasAccess = await documentController.hasDirectoryAccess(req, document.directoryId || null);
+          if (!hasAccess) {
+            return res.status(403).json({ error: "You do not have access to this document" });
+          }
         }
       }
 
@@ -339,7 +673,7 @@ export const documentController = {
       if (!currentWorkspace) {
         return res.status(400).json({ error: "Workspace is required" });
       }
-      
+
       // Always use user's actual domain (not workspace slug)
       // req.userDomain might be workspace slug, but we need the actual user domain
       const actualDomain = req.user?.domain || req.userDomain;
@@ -401,6 +735,21 @@ export const documentController = {
       if (!document) {
         return res.status(404).json({ error: "Document not found" });
       }
+
+      // Update directory's updatedAt when document is renamed or moved
+      if (document.directoryId) {
+        const { Directory } = await import("../models/Directory");
+        const now = new Date();
+        await Directory.updateOne(
+          { id: document.directoryId, workspaceId: currentWorkspace },
+          {
+            $set: {
+              updatedAt: now,
+            },
+          }
+        );
+      }
+
       res.json(document);
     } catch (error) {
       res.status(500).json({ error: "Failed to update document" });
@@ -440,49 +789,127 @@ export const documentController = {
         }
       }
 
-      // Build list of document ids to cascade delete against (this doc + paired doc if any)
+      // Build list of document ids to cascade delete against (only the document being deleted)
       const docIdsToDelete: string[] = [document.id];
+      let linkedRhpId: string | null = null;
+      let linkedRhpDoc: any = null;
 
-      // If deleting a DRHP, also delete its related RHP document and its file
+      // If deleting a DRHP, unlink from RHP (don't delete RHP)
       if (document.type === "DRHP" && document.relatedRhpId) {
-        const rhpDoc = await Document.findOne({ id: document.relatedRhpId, domain: req.userDomain, workspaceId: currentWorkspace });
-        if (rhpDoc) {
-          if (rhpDoc.fileKey) {
-            try {
-              const deleteRhpCommand = new DeleteObjectCommand({
-                Bucket: R2_BUCKET,
-                Key: rhpDoc.fileKey,
-              });
-              await r2Client.send(deleteRhpCommand);
-            } catch (err) {
-              console.error("Failed to delete RHP file from R2:", err);
-            }
-          }
-          docIdsToDelete.push(rhpDoc.id);
+        linkedRhpId = document.relatedRhpId;
+        linkedRhpDoc = await Document.findOne({ id: linkedRhpId, domain: req.userDomain, workspaceId: currentWorkspace });
+        if (linkedRhpDoc) {
+          // Unlink RHP from DRHP
+          linkedRhpDoc.relatedDrhpId = undefined as any;
+          await linkedRhpDoc.save();
+          // Don't delete RHP - just unlink
         }
       }
 
-      // If deleting an RHP, unlink from DRHP (and include for report deletion scope)
+      // If deleting an RHP, unlink from DRHP (don't delete DRHP)
       if (document.type === "RHP") {
         const drhpDoc = await Document.findOne({ relatedRhpId: document.id, domain: req.userDomain, workspaceId: currentWorkspace });
         if (drhpDoc) {
           drhpDoc.relatedRhpId = undefined as any;
           await drhpDoc.save();
-          // not deleting DRHP here; only unlink
+          // Only unlink, don't delete DRHP
         }
       }
 
-      // Delete summaries for all affected documents
-      await Summary.deleteMany({ domain: req.userDomain, workspaceId: currentWorkspace, documentId: { $in: docIdsToDelete } });
+      // Delete summaries - only for the document being deleted
+      await Summary.deleteMany({
+        domain: req.userDomain,
+        workspaceId: currentWorkspace,
+        documentId: document.id
+      });
 
-      // Delete chats for all affected documents
-      await Chat.deleteMany({ domain: req.userDomain, workspaceId: currentWorkspace, documentId: { $in: docIdsToDelete } });
+      // Delete chats for the document being deleted
+      await Chat.deleteMany({ domain: req.userDomain, workspaceId: currentWorkspace, documentId: document.id });
 
-      // Delete reports that reference any of the affected documents as DRHP or RHP
-      await Report.deleteMany({ domain: req.userDomain, workspaceId: currentWorkspace, $or: [ { drhpId: { $in: docIdsToDelete } }, { rhpId: { $in: docIdsToDelete } } ] });
+      // Delete reports based on document type
+      if (document.type === "DRHP") {
+        // When deleting DRHP: delete reports that reference this DRHP
+        await Report.deleteMany({
+          domain: req.userDomain,
+          workspaceId: currentWorkspace,
+          $or: [
+            { drhpId: document.id },
+            { drhpNamespace: document.namespace }
+          ]
+        });
+      } else if (document.type === "RHP") {
+        // When deleting RHP: delete reports that reference this RHP
+        await Report.deleteMany({
+          domain: req.userDomain,
+          workspaceId: currentWorkspace,
+          $or: [
+            { rhpId: document.id },
+            { rhpNamespace: document.rhpNamespace || document.namespace }
+          ]
+        });
+      } else {
+        // For other document types: delete reports that reference this document
+        await Report.deleteMany({
+          domain: req.userDomain,
+          workspaceId: currentWorkspace,
+          $or: [
+            { drhpId: document.id },
+            { rhpId: document.id },
+            { drhpNamespace: document.namespace },
+            { rhpNamespace: document.namespace }
+          ]
+        });
+      }
 
       // Finally, delete the documents themselves
       await Document.deleteMany({ id: { $in: docIdsToDelete }, domain: req.userDomain, workspaceId: currentWorkspace });
+
+      // Update directory statistics after deletion
+      if (document.directoryId) {
+        const { Directory } = await import("../models/Directory");
+        const directory = await Directory.findOne({
+          id: document.directoryId,
+          workspaceId: currentWorkspace,
+        });
+
+        if (directory) {
+          // Recalculate directory statistics
+          const docCount = await Document.countDocuments({
+            directoryId: document.directoryId,
+            workspaceId: currentWorkspace,
+          });
+          const drhpCount = await Document.countDocuments({
+            directoryId: document.directoryId,
+            workspaceId: currentWorkspace,
+            type: "DRHP",
+          });
+          const rhpCount = await Document.countDocuments({
+            directoryId: document.directoryId,
+            workspaceId: currentWorkspace,
+            type: "RHP",
+          });
+          const lastDoc = await Document.findOne({
+            directoryId: document.directoryId,
+            workspaceId: currentWorkspace,
+          })
+            .sort({ uploadedAt: -1 })
+            .select("uploadedAt");
+
+          const now = new Date();
+          await Directory.updateOne(
+            { id: document.directoryId, workspaceId: currentWorkspace },
+            {
+              $set: {
+                documentCount: docCount,
+                drhpCount,
+                rhpCount,
+                updatedAt: now,
+                ...(lastDoc?.uploadedAt && { lastDocumentUpload: lastDoc.uploadedAt }),
+              },
+            }
+          );
+        }
+      }
 
       // Publish delete event for the primary document
       await publishEvent({
@@ -525,7 +952,45 @@ export const documentController = {
 
       // Determine document type from request body, default to DRHP
       const documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
-      
+
+      // NEW: Directory is now required for document upload (directory-first approach)
+      const directoryId = req.body.directoryId === "root" ? null : req.body.directoryId;
+      if (!directoryId) {
+        return res.status(400).json({
+          error: "Directory is required. Please select a company directory before uploading."
+        });
+      }
+
+      // Verify directory exists in the workspace (including shared directories)
+      const { Directory } = await import("../models/Directory");
+      let directory = await Directory.findOne({
+        id: directoryId,
+        workspaceId,
+      });
+
+      // If not found, check if it's a shared directory
+      if (!directory) {
+        directory = await Directory.findOne({
+          id: directoryId,
+          workspaceId,
+          isShared: true,
+          sharedWithUserId: user._id.toString(),
+        });
+      }
+
+      if (!directory) {
+        return res.status(404).json({
+          error: "Directory not found. Please select a valid company directory."
+        });
+      }
+
+      // If this is a shared directory, use the recipient's workspace (current workspace)
+      // Documents created in shared directories go to recipient's workspace
+      const finalWorkspaceId = directory.isShared ? workspaceId : directory.workspaceId;
+
+      // For shared directories, use the shared directory ID (not the original)
+      const finalDirectoryId = directory.isShared ? directory.id : directoryId;
+
       const docData: any = {
         id: req.body.id || fileKey, // Use provided id from frontend or fallback to fileKey
         name: originalname,
@@ -536,8 +1001,7 @@ export const documentController = {
         domain: user.domain, // Add domain for workspace isolation - backward compatibility
         domainId: userWithDomain.domainId, // Link to Domain schema
         workspaceId, // Workspace required - middleware ensures it's set
-        directoryId:
-          req.body.directoryId === "root" ? null : req.body.directoryId || null,
+        directoryId: directoryId, // Required - no null allowed
       };
       // Pre-check duplicate by namespace within workspace
       const duplicate = await Document.findOne({
@@ -558,6 +1022,24 @@ export const documentController = {
       const document = new Document(docData);
       await document.save();
 
+      // NEW: Update directory statistics (use the actual directory ID that was used)
+      if (finalDirectoryId) {
+        const now = new Date();
+        await Directory.updateOne(
+          { id: finalDirectoryId, workspaceId: finalWorkspaceId },
+          {
+            $inc: {
+              documentCount: 1,
+              ...(documentType === "DRHP" ? { drhpCount: 1 } : { rhpCount: 1 }),
+            },
+            $set: {
+              lastDocumentUpload: now,
+              updatedAt: now,
+            },
+          }
+        );
+      }
+
       // Publish event for upload
       await publishEvent({
         actorUserId: (req as any).user?._id?.toString?.(),
@@ -569,59 +1051,41 @@ export const documentController = {
         notifyWorkspace: true,
       });
 
-      // Notify n8n for further processing - choose webhook based on document type
-      const n8nWebhookUrl = documentType === "RHP"
-        ? "https://n8n-excollo.azurewebsites.net/webhook/upload-rhp"
-        : "https://n8n-excollo.azurewebsites.net/webhook/bfda1ff3-99be-4f6e-995f-7728ca5b2f6a";
+      // --- INTEGRATION: CALL PYTHON API INSTEAD OF N8N ---
+      const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
 
-      // Download file from S3 and send to n8n
-      const getObjectCommand = new GetObjectCommand({
-        Bucket: R2_BUCKET,
-        Key: fileKey,
-      });
-      const s3Response = await r2Client.send(getObjectCommand);
-      const form = new FormData();
-      form.append("file", s3Response.Body as any, {
-        filename: document.name,
-        contentType: "application/pdf",
-      });
-      form.append("documentId", document.id);
-      form.append("namespace", document.name);
-      form.append("name", document.name);
-      form.append("domain", document.domain || user.domain);
-      form.append("domainId", document.domainId || userWithDomain.domainId);
-      form.append("workspaceId", document.workspaceId || workspaceId);
-      form.append("type", document.type); // Include document type in n8n request
-
-      // Send to n8n and check response for status
       try {
-        const n8nResponse = await axios.post(n8nWebhookUrl, form, {
-          headers: form.getHeaders(),
-          maxContentLength: Infinity,
-          maxBodyLength: Infinity,
-          timeout: 300000, // 5 minutes timeout
+        const fileUrl = await this.getPresignedUrl(fileKey);
+
+        console.log(`Sending document to Python API: ${pythonApiUrl}/jobs/document`);
+
+        const pythonResponse = await axios.post(`${pythonApiUrl}/jobs/document`, {
+          file_url: fileUrl,
+          file_type: "pdf",
+          metadata: {
+            filename: document.name,
+            doc_type: documentType.toLowerCase(),
+            documentId: document.id,
+            domain: document.domain || user.domain,
+            domainId: document.domainId || userWithDomain.domainId,
+            workspaceId: document.workspaceId || workspaceId,
+            directoryId: finalDirectoryId
+          }
+        }, {
+          timeout: 60000 // 1 minute timeout for the initial call
         });
-        
-        // Check if n8n returned a status in the response
-        if (n8nResponse?.data) {
-          const n8nStatus = n8nResponse.data?.status || n8nResponse.data?.documentStatus;
-          const normalizedStatus = n8nStatus?.toLowerCase()?.trim();
-          
-          // If n8n returned a completed/ready status, update the document immediately
-          if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
+
+        if (pythonResponse.data && pythonResponse.data.status === "success") {
+          console.log(`✅ Document ${document.id} successfully sent to Python API`);
+          // Note: Python API is synchronous in this specific endpoint but 
+          // also sends a background notification. We can update status if it finished.
+          if (pythonResponse.data.details?.success) {
             document.status = "completed";
             await document.save();
-            console.log(`✅ Document ${document.id} status updated to "completed" from n8n response`);
-          } else if (normalizedStatus === "failed" || normalizedStatus === "error") {
-            document.status = "failed";
-            await document.save();
-            console.log(`❌ Document ${document.id} status updated to "failed" from n8n response`);
           }
-          // If status is "processing" or undefined, keep the default "processing" status
         }
-      } catch (n8nErr) {
-        console.error("Failed to send file to n8n:", n8nErr);
-        // Even if n8n call fails, return the document (it's already saved with "processing" status)
+      } catch (pythonErr: any) {
+        console.error("Failed to call Python Ingestion API:", pythonErr.message);
       }
 
       res.status(201).json({ message: "File uploaded successfully", document });
@@ -633,16 +1097,79 @@ export const documentController = {
 
   async downloadDocument(req: AuthRequest, res: Response) {
     try {
-      const document = await Document.findOne({ id: req.params.id });
+      // Workspace is required
+      const currentWorkspace = req.currentWorkspace;
+      if (!currentWorkspace) {
+        return res.status(400).json({ error: "Workspace is required" });
+      }
+
+      // Get workspace to find its domain
+      const { Workspace } = await import("../models/Workspace");
+      const workspace = await Workspace.findOne({ workspaceId: currentWorkspace });
+      const workspaceDomain = workspace?.domain || req.userDomain;
+      const userDomain = req.user?.domain;
+      const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
+      const isSameDomainAdmin = req.user?.role === "admin" && userDomain === workspaceDomain;
+
+      // First, try to find document in current workspace/domain
+      let document = await Document.findOne({
+        id: req.params.id,
+        domain: workspaceDomain,
+        workspaceId: currentWorkspace,
+      });
+
+      // If not found, check if it's in a shared directory's original directory
+      if (!document) {
+        const { Directory } = await import("../models/Directory");
+        const sharedDirectories = await Directory.find({
+          workspaceId: currentWorkspace,
+          isShared: true,
+        });
+
+        for (const sharedDir of sharedDirectories) {
+          if (sharedDir.sharedFromDomain && sharedDir.sharedFromWorkspaceId) {
+            const originalDoc = await Document.findOne({
+              id: req.params.id,
+              domain: sharedDir.sharedFromDomain,
+              workspaceId: sharedDir.sharedFromWorkspaceId,
+            });
+            if (originalDoc) {
+              if (!sharedDir.sharedFromDirectoryId || originalDoc.directoryId === sharedDir.sharedFromDirectoryId) {
+                document = originalDoc;
+                break;
+              }
+            }
+          }
+        }
+      }
+
       if (!document || !document.fileKey) {
         return res.status(404).json({ error: "Document not found or no file" });
       }
+
+      // Check access to the document's directory
+      // Same-domain admins have access to all documents
+      if (!isSameDomainAdmin) {
+        // For same-domain users in the same workspace, allow access
+        const isSameDomainSameWorkspace =
+          !isCrossDomainUser &&
+          document.workspaceId === currentWorkspace &&
+          document.domain === workspaceDomain;
+
+        if (!isSameDomainSameWorkspace) {
+          // For cross-domain users or documents from different workspaces, check directory access
+          const hasAccess = await documentController.hasDirectoryAccess(req, document.directoryId || null);
+          if (!hasAccess) {
+            return res.status(403).json({ error: "You do not have access to this document" });
+          }
+        }
+      }
+
       const inline = (req.query.inline as string) === "1";
       res.set({
         "Content-Type": "application/pdf",
-        "Content-Disposition": `${
-          inline ? "inline" : "attachment"
-        }; filename=\"${document.name}\"`,
+        "Content-Disposition": `${inline ? "inline" : "attachment"
+          }; filename=\"${document.name}\"`,
         "Cache-Control": "private, max-age=60",
       });
       const getObjectCommand = new GetObjectCommand({
@@ -658,6 +1185,7 @@ export const documentController = {
         res.status(500).json({ error: "File stream not available" });
       }
     } catch (error) {
+      console.error("Error in downloadDocument:", error);
       res.status(500).json({ error: "Failed to download document" });
     }
   },
@@ -713,39 +1241,39 @@ export const documentController = {
       // Accept both jobId and documentId from n8n (n8n might send either)
       const { jobId, documentId, status, error } = req.body;
       const identifier = jobId || documentId;
-      
+
       if (!identifier || !status) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Missing jobId/documentId or status",
           received: { jobId, documentId, status }
         });
       }
-      
+
       const normalizedStatus = status.trim().toLowerCase();
       console.log(`📥 Received status update for ${identifier}: ${normalizedStatus} (type: ${req.body.type || 'unknown'})`);
-      
+
       // Update document status in MongoDB - try multiple lookup methods
       try {
         let document = await Document.findOne({ id: identifier });
-        
+
         // If not found by id, try by documentId field
         if (!document && documentId) {
           document = await Document.findOne({ id: documentId });
         }
-        
+
         // If still not found, try by fileKey
         if (!document) {
           document = await Document.findOne({ fileKey: identifier });
         }
-        
+
         // If still not found, try by _id (MongoDB ObjectId)
         if (!document && identifier.match(/^[0-9a-fA-F]{24}$/)) {
           document = await Document.findById(identifier);
         }
-        
+
         // Additional lookup: try searching by type if provided (for RHP documents)
         if (!document && req.body.type) {
-          document = await Document.findOne({ 
+          document = await Document.findOne({
             type: req.body.type,
             $or: [
               { id: identifier },
@@ -754,11 +1282,11 @@ export const documentController = {
             ]
           });
         }
-        
+
         if (document) {
           // Map n8n status to our document status
           let newStatus = document.status; // Default to current status
-          
+
           if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
             newStatus = "completed";
           } else if (normalizedStatus === "failed" || normalizedStatus === "error") {
@@ -766,17 +1294,17 @@ export const documentController = {
           } else if (normalizedStatus === "processing") {
             newStatus = "processing";
           }
-          
+
           // Always update if status is "completed" (force update even if already completed)
           const oldStatus = document.status;
           const shouldUpdate = oldStatus !== newStatus || (newStatus === "completed" && oldStatus === "processing");
-          
+
           if (shouldUpdate) {
             // Update using both methods to ensure persistence
             document.status = newStatus;
             await document.save();
             console.log(`✅ Updated document ${document.id} (${document.name}, type: ${document.type}) status from "${oldStatus}" to "${newStatus}"`);
-            
+
             // Also try to find and update by MongoDB _id to ensure persistence (especially for RHP)
             try {
               const updateResult = await Document.updateOne(
@@ -791,7 +1319,7 @@ export const documentController = {
             } catch (updateError) {
               console.error(`⚠️ Secondary update failed (non-critical):`, updateError);
             }
-            
+
             // Verify the update was persisted
             const verifyDoc = await Document.findById(document._id);
             if (verifyDoc && verifyDoc.status === newStatus) {
@@ -802,11 +1330,11 @@ export const documentController = {
           } else {
             console.log(`ℹ️ Document ${document.id} (type: ${document.type}) status unchanged: "${oldStatus}"`);
           }
-          
+
           // Use the found document's id for socket emission
           const actualJobId = document.id;
           io.emit("upload_status", { jobId: actualJobId, status: newStatus, error });
-          
+
           res.status(200).json({
             message: "Upload status update processed",
             jobId: actualJobId,
@@ -820,10 +1348,10 @@ export const documentController = {
         } else {
           console.warn(`⚠️ Document not found for identifier: ${identifier}`);
           console.warn(`   Tried: id=${identifier}, documentId=${documentId}, fileKey lookup, _id lookup, type-based lookup`);
-          
+
           // Still emit socket event even if document not found (for debugging)
           io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: error || "Document not found" });
-          
+
           res.status(404).json({
             message: "Document not found",
             identifier,
@@ -838,10 +1366,10 @@ export const documentController = {
           stack: dbError.stack,
           name: dbError.name,
         });
-        
+
         // Still emit socket event for debugging
         io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: dbError.message });
-        
+
         res.status(500).json({
           message: "Failed to update document status",
           identifier,
@@ -913,60 +1441,41 @@ export const documentController = {
       drhp.relatedRhpId = rhpDoc.id;
       await drhp.save();
 
-      // Send to n8n with RHP namespace
-      const n8nWebhookUrl =
-        "https://n8n-excollo.azurewebsites.net/webhook/upload-rhp";
+      // --- INTEGRATION: CALL PYTHON API INSTEAD OF N8N ---
+      const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+      let finalStatus = "processing";
 
-      // Download file from S3 and send to n8n
-      const getObjectCommand = new GetObjectCommand({
-        Bucket: R2_BUCKET,
-        Key: fileKey,
-      });
-      const s3Response = await r2Client.send(getObjectCommand);
-      const form = new FormData();
-      form.append("file", s3Response.Body as any, {
-        filename: rhpDoc.name,
-        contentType: "application/pdf",
-      });
-      form.append("documentId", rhpDoc.id);
-      form.append("namespace", rhpNamespace); // Use RHP namespace for n8n
-      form.append("name", drhp.name);
-      form.append("domain", rhpDoc.domain || user.domain);
-      form.append("domainId", rhpDoc.domainId || userWithDomain.domainId);
-      form.append("workspaceId", rhpDoc.workspaceId || workspaceId);
-
-      // Send to n8n and check response for status
-      let finalStatus = "processing"; // Default status
       try {
-        const n8nResponse = await axios.post(n8nWebhookUrl, form, {
-          headers: form.getHeaders(),
-          maxContentLength: Infinity,
-          maxBodyLength: Infinity,
-          timeout: 300000, // 5 minutes timeout
+        const fileUrl = await this.getPresignedUrl(fileKey);
+
+        console.log(`Sending RHP document to Python API: ${pythonApiUrl}/jobs/document`);
+
+        const pythonResponse = await axios.post(`${pythonApiUrl}/jobs/document`, {
+          file_url: fileUrl,
+          file_type: "pdf",
+          metadata: {
+            filename: rhpDoc.name,
+            doc_type: "rhp",
+            documentId: rhpDoc.id,
+            relatedDrhpId: drhp.id,
+            domain: rhpDoc.domain || user.domain,
+            domainId: rhpDoc.domainId || userWithDomain.domainId,
+            workspaceId: rhpDoc.workspaceId || workspaceId
+          }
+        }, {
+          timeout: 60000
         });
-        
-        // Check if n8n returned a status in the response
-        if (n8nResponse?.data) {
-          const n8nStatus = n8nResponse.data?.status || n8nResponse.data?.documentStatus;
-          const normalizedStatus = n8nStatus?.toLowerCase()?.trim();
-          
-          // If n8n returned a completed/ready status, update the document immediately
-          if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
+
+        if (pythonResponse.data && pythonResponse.data.status === "success") {
+          console.log(`✅ RHP Document ${rhpDoc.id} successfully sent to Python API`);
+          if (pythonResponse.data.details?.success) {
             rhpDoc.status = "completed";
             await rhpDoc.save();
             finalStatus = "completed";
-            console.log(`✅ RHP Document ${rhpDoc.id} status updated to "completed" from n8n response`);
-          } else if (normalizedStatus === "failed" || normalizedStatus === "error") {
-            rhpDoc.status = "failed";
-            await rhpDoc.save();
-            finalStatus = "failed";
-            console.log(`❌ RHP Document ${rhpDoc.id} status updated to "failed" from n8n response`);
           }
-          // If status is "processing" or undefined, keep the default "processing" status
         }
-      } catch (n8nErr) {
-        console.error("Failed to send file to n8n:", n8nErr);
-        // Even if n8n call fails, return the document (it's already saved with "processing" status)
+      } catch (pythonErr: any) {
+        console.error("Failed to call Python Ingestion API for RHP:", pythonErr.message);
       }
 
       // Emit upload status (use the actual status from n8n or default to processing)
@@ -987,7 +1496,7 @@ export const documentController = {
     try {
       const user = req.user;
       console.log("Admin getAllAdmin - User:", user?.role, "Domain:", req.userDomain);
-      
+
       if (!user || user.role !== "admin") {
         console.log("Admin access denied for user:", user?.role);
         return res.status(403).json({ error: "Admin access required" });
@@ -1010,7 +1519,7 @@ export const documentController = {
       console.log("Admin query:", JSON.stringify(query, null, 2));
       const documents = await Document.find(query).sort({ uploadedAt: -1 });
       console.log("Found documents:", documents.length);
-      
+
       // Get all workspaces to map workspaceId to workspace name
       const { Workspace } = await import("../models/Workspace");
       const workspaces = await Workspace.find({ domain: req.user?.domain || req.userDomain });
@@ -1177,12 +1686,12 @@ export const documentController = {
           domain: req.userDomain,
           workspaceId: currentWorkspace,
         });
-        
+
         if (linkedDocument) {
           linkedDocument.relatedDrhpId = undefined;
           await linkedDocument.save();
         }
-        
+
         document.relatedRhpId = undefined;
         await document.save();
       } else if (document.type === "RHP" && document.relatedDrhpId) {
@@ -1191,12 +1700,12 @@ export const documentController = {
           domain: req.userDomain,
           workspaceId: currentWorkspace,
         });
-        
+
         if (linkedDocument) {
           linkedDocument.relatedRhpId = undefined;
           await linkedDocument.save();
         }
-        
+
         document.relatedDrhpId = undefined;
         await document.save();
       }
@@ -1231,3 +1740,4 @@ export const documentController = {
     }
   },
 };
+

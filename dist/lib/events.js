@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.publishEvent = publishEvent;
-const ActivityLog_1 = require("../models/ActivityLog");
 const Notification_1 = require("../models/Notification");
 const User_1 = require("../models/User");
 const Domain_1 = require("../models/Domain");
@@ -81,23 +80,9 @@ async function publishEvent(evt) {
     if (!domainId) {
         console.warn(`Warning: Could not find domainId for domain "${domain}". Notification may fail validation.`);
     }
-    // Create activity log
-    const logData = {
-        id: genId("act"),
-        actorUserId,
-        domain,
-        action,
-        resourceType,
-        resourceId,
-        title: title || action,
-        metadata: metadata || {},
-    };
-    // Add domainId if available
-    if (domainId) {
-        logData.domainId = domainId;
-    }
-    const log = new ActivityLog_1.ActivityLog(logData);
-    await log.save();
+    // Note: ActivityLog creation removed from publishEvent
+    // Use auditLogger.logActivity() directly if ActivityLog is needed
+    // publishEvent is now only for creating Notifications
     // Determine who to notify
     let userIdsToNotify = [];
     if (notifyUserIds && notifyUserIds.length) {

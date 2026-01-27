@@ -2,14 +2,16 @@ import { Request, Response } from "express";
 import { Report } from "../models/Report";
 import { User } from "../models/User";
 import axios from "axios";
-import { io } from "../index";
-import { publishEvent } from "../lib/events";
-
 import { writeFile, unlink } from "fs/promises";
 import { exec } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import os from "os";
+import { io } from "../index";
+import { publishEvent } from "../lib/events";
+import { r2Client, R2_BUCKET } from "../config/r2";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { GetObjectCommand } from "@aws-sdk/client-s3";
 
 const execAsync = promisify(exec);
 
@@ -20,15 +22,216 @@ interface AuthRequest extends Request {
 }
 
 export const reportController = {
+  async compareDocuments(req: AuthRequest, res: Response) {
+    try {
+      const { drhpId, rhpId, drhpNamespace, rhpNamespace, sessionId, prompt } = req.body;
+
+      if (!drhpId || !rhpId || !drhpNamespace || !rhpNamespace) {
+        return res.status(400).json({ error: "Missing required fields for comparison" });
+      }
+
+      const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+      const domain = req.userDomain || (req as any).user?.domain;
+
+      // Get domainId
+      let domainId = (req as any).user?.domainId;
+      if (!domainId && req.user?._id) {
+        const user = await User.findById(req.user._id).select("domainId").lean();
+        domainId = user?.domainId;
+      }
+
+      console.log(`Triggering Python Comparison: ${drhpNamespace} vs ${rhpNamespace}`);
+
+      const payload = {
+        drhpNamespace,
+        rhpNamespace,
+        drhpDocumentId: drhpId,
+        rhpDocumentId: rhpId,
+        sessionId: sessionId || Date.now().toString(),
+        domain: domain,
+        domainId: domainId,
+        authorization: req.headers.authorization,
+        metadata: {
+          workspaceId: req.currentWorkspace || domain,
+          triggeredBy: req.user?._id
+        }
+      };
+
+      const pythonResponse = await axios.post(`${pythonApiUrl}/jobs/comparison`, payload, {
+        timeout: 30000
+      });
+
+      if (pythonResponse.data && pythonResponse.data.status === "accepted") {
+        return res.json({
+          status: "processing",
+          job_id: pythonResponse.data.job_id,
+          message: "Comparison job started successfully"
+        });
+      }
+
+      res.status(500).json({ error: "Failed to start comparison job", details: pythonResponse.data });
+    } catch (error: any) {
+      console.error("Error in compareDocuments:", error.message);
+      res.status(500).json({ error: "Comparison trigger failed", message: error.message });
+    }
+  },
+
   async getAll(req: AuthRequest, res: Response) {
     try {
+      const link = (req as any).linkAccess;
+
       // Get current workspace from request
       const currentWorkspace = req.currentWorkspace || req.userDomain;
+      const domain = req.userDomain || (link?.domain);
 
       const query: any = {
-        domain: req.userDomain, // Filter by user's domain
-        workspaceId: currentWorkspace, // Filter by user's workspace
+        domain: domain, // Use link domain if available, otherwise user domain
+        workspaceId: currentWorkspace,
       };
+
+      // Handle link access
+      if (link) {
+        if (link.resourceType === "document") {
+          // If link is for a specific document, show reports that reference that document
+          const { Document } = await import("../models/Document");
+          const document = await Document.findOne({
+            id: link.resourceId,
+            domain: link.domain,
+          });
+          if (document) {
+            // Show reports that reference this document as DRHP or RHP
+            query.$or = [
+              { drhpId: document.id },
+              { rhpId: document.id },
+              { drhpNamespace: document.namespace },
+              { rhpNamespace: document.namespace || document.rhpNamespace },
+            ];
+          } else {
+            // Document not found, return empty array
+            return res.json([]);
+          }
+        } else if (link.resourceType === "directory") {
+          // If link is for a directory, show reports for all documents in that directory
+          const { Document } = await import("../models/Document");
+          const documents = await Document.find({
+            directoryId: link.resourceId,
+            domain: link.domain,
+          });
+          const documentIds = documents.map(doc => doc.id);
+          const documentNamespaces = documents.map(doc => doc.namespace);
+          if (documentIds.length > 0 || documentNamespaces.length > 0) {
+            query.$or = [
+              { drhpId: { $in: documentIds } },
+              { rhpId: { $in: documentIds } },
+              { drhpNamespace: { $in: documentNamespaces } },
+              { rhpNamespace: { $in: documentNamespaces } },
+            ];
+          } else {
+            // No documents in directory, return empty array
+            return res.json([]);
+          }
+        }
+      } else {
+        // Check for shared directories via SharePermission
+        const { SharePermission } = await import("../models/SharePermission");
+        const { Document } = await import("../models/Document");
+        const { Directory } = await import("../models/Directory");
+
+        const userId = req.user?._id?.toString();
+        const userEmail = req.user?.email?.toLowerCase();
+        const sharedDirectoryIds: string[] = [];
+
+        // Find all directories shared with this user
+        if (userId) {
+          const userShares = await SharePermission.find({
+            resourceType: "directory",
+            scope: "user",
+            principalId: userId,
+          });
+          sharedDirectoryIds.push(...userShares.map(s => s.resourceId));
+        }
+
+        if (userEmail) {
+          const emailShares = await SharePermission.find({
+            resourceType: "directory",
+            scope: "user",
+            invitedEmail: userEmail,
+          });
+          sharedDirectoryIds.push(...emailShares.map(s => s.resourceId));
+        }
+
+        // Also check workspace-scoped shares
+        if (currentWorkspace) {
+          const workspaceShares = await SharePermission.find({
+            resourceType: "directory",
+            scope: "workspace",
+            principalId: currentWorkspace,
+          });
+          sharedDirectoryIds.push(...workspaceShares.map(s => s.resourceId));
+        }
+
+        // Get all documents from shared directories
+        if (sharedDirectoryIds.length > 0) {
+          const uniqueDirIds = [...new Set(sharedDirectoryIds)];
+          // Get documents from all shared directories (across domains/workspaces)
+          const sharedDocs = await Document.find({
+            directoryId: { $in: uniqueDirIds },
+          });
+          const sharedDocumentIds = sharedDocs.map(doc => doc.id);
+          const sharedDocumentNamespaces = sharedDocs.map(doc => doc.namespace);
+
+          // Also check for shared directories created via Directory.isShared
+          const sharedDirs = await Directory.find({
+            isShared: true,
+            sharedWithUserId: userId,
+            workspaceId: currentWorkspace,
+          });
+
+          for (const sharedDir of sharedDirs) {
+            if (sharedDir.sharedFromDirectoryId) {
+              const originalDir = await Directory.findOne({
+                id: sharedDir.sharedFromDirectoryId,
+                domain: sharedDir.sharedFromDomain,
+                workspaceId: sharedDir.sharedFromWorkspaceId,
+              });
+              if (originalDir) {
+                const originalDocs = await Document.find({
+                  directoryId: originalDir.id,
+                  domain: originalDir.domain,
+                  workspaceId: originalDir.workspaceId,
+                });
+                sharedDocumentIds.push(...originalDocs.map(doc => doc.id));
+                sharedDocumentNamespaces.push(...originalDocs.map(doc => doc.namespace));
+              }
+            }
+          }
+
+          // Include reports for shared documents
+          if (sharedDocumentIds.length > 0 || sharedDocumentNamespaces.length > 0) {
+            const sharedReportsQuery: any[] = [
+              { drhpId: { $in: sharedDocumentIds } },
+              { rhpId: { $in: sharedDocumentIds } },
+            ];
+
+            if (sharedDocumentNamespaces.length > 0) {
+              sharedReportsQuery.push(
+                { drhpNamespace: { $in: sharedDocumentNamespaces } },
+                { rhpNamespace: { $in: sharedDocumentNamespaces } }
+              );
+            }
+
+            // Combine with workspace reports
+            // Remove domain/workspaceId from base query since we're using $or
+            delete query.domain;
+            delete query.workspaceId;
+            query.$or = [
+              { domain: domain, workspaceId: currentWorkspace },
+              ...sharedReportsQuery,
+            ];
+          }
+        }
+        // If no shared directories, query already has domain and workspaceId, so it will show all workspace reports
+      }
 
       // Visibility: All members of the workspace can see all reports in that workspace.
       // Do not further restrict by userId/microsoftId for reads.
@@ -91,7 +294,7 @@ export const reportController = {
 
       // Get domainId - priority: 1) from request body (n8n), 2) from user, 3) from domain name lookup
       let domainId: string | undefined = bodyDomainId;
-      
+
       if (!domainId) {
         // Try to get from user if available
         const user = req.user;
@@ -100,7 +303,7 @@ export const reportController = {
           domainId = userWithDomain?.domainId || (userWithDomain as any)?.domainId;
         }
       }
-      
+
       // If domainId still not found, try to get it from the domain name
       if (!domainId && actualDomain) {
         try {
@@ -113,9 +316,9 @@ export const reportController = {
           console.error("Error fetching domainId from Domain model:", error);
         }
       }
-      
+
       if (!domainId) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: "domainId is required. Unable to determine domainId from request body, user, or domain.",
           message: "Please ensure domainId is included in the request body or contact administrator."
         });
@@ -146,6 +349,24 @@ export const reportController = {
 
       const report = new Report(reportData);
       await report.save();
+
+      // Update directory's updatedAt when report is created
+      if (drhpId) {
+        const { Document } = await import("../models/Document");
+        const { Directory } = await import("../models/Directory");
+        const doc = await Document.findOne({ id: drhpId, workspaceId: currentWorkspace });
+        if (doc?.directoryId) {
+          const now = new Date();
+          await Directory.updateOne(
+            { id: doc.directoryId, workspaceId: currentWorkspace },
+            {
+              $set: {
+                updatedAt: now,
+              },
+            }
+          );
+        }
+      }
 
       // Publish event for workspace notification (only if user context available)
       if (req.user?._id && req.userDomain) {
@@ -188,6 +409,7 @@ export const reportController = {
     }
   },
 
+
   // Download DOCX generated from HTML content by report ID
   async downloadDocx(req: AuthRequest, res: Response) {
     try {
@@ -213,18 +435,27 @@ export const reportController = {
       );
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${report.title || "report"}.docx"`
+        `attachment; filename="${(report.title || "report").replace(/[^a-z0-9]/gi, "_")}.docx"`
       );
       res.sendFile(docxPath, async (err) => {
         // Clean up temp files
-        await unlink(htmlPath);
-        await unlink(docxPath);
+        if (err) {
+          console.error("Error sending file:", err);
+        }
+        try {
+          await unlink(htmlPath);
+          await unlink(docxPath);
+        } catch (cleanupError) {
+          console.error("Error cleaning up temp files:", cleanupError);
+        }
       });
     } catch (error) {
       console.error("Error generating DOCX with Pandoc:", error);
       res.status(500).json({ error: "Failed to generate DOCX" });
     }
   },
+
+
 
   async update(req: AuthRequest, res: Response) {
     try {
@@ -320,8 +551,8 @@ export const reportController = {
           if (pdfcoResponse.data?.error || pdfcoResponse.data?.status === 402) {
             const errorMsg = pdfcoResponse.data?.message || "PDF.co API error: Insufficient credits or service unavailable";
             console.error("PDF.co API error:", pdfcoResponse.data);
-            return res.status(503).json({ 
-              error: "PDF generation service temporarily unavailable", 
+            return res.status(503).json({
+              error: "PDF generation service temporarily unavailable",
               message: errorMsg,
               details: "The PDF generation service is currently unavailable. Please try again later or contact support."
             });
@@ -345,8 +576,8 @@ export const reportController = {
         if (pdfcoError.response?.status === 402) {
           const errorData = pdfcoError.response?.data || {};
           console.error("PDF.co API error (402):", errorData);
-          return res.status(503).json({ 
-            error: "PDF generation service unavailable", 
+          return res.status(503).json({
+            error: "PDF generation service unavailable",
             message: errorData.message || "Insufficient credits for PDF generation",
             details: "The PDF generation service requires additional credits. Please contact support or try again later."
           });
@@ -354,8 +585,8 @@ export const reportController = {
         if (pdfcoError.response?.status) {
           const errorData = pdfcoError.response?.data || {};
           console.error(`PDF.co API error (${pdfcoError.response.status}):`, errorData);
-          return res.status(503).json({ 
-            error: "PDF generation service error", 
+          return res.status(503).json({
+            error: "PDF generation service error",
             message: errorData.message || "PDF generation failed",
             details: "The PDF generation service encountered an error. Please try again later."
           });
@@ -364,15 +595,15 @@ export const reportController = {
       }
     } catch (error: any) {
       console.error("Error generating PDF with PDF.co:", error);
-      
+
       // Check if response was already sent
       if (res.headersSent) {
         return;
       }
-      
+
       // Return proper error response
-      res.status(500).json({ 
-        error: "Failed to generate PDF", 
+      res.status(500).json({
+        error: "Failed to generate PDF",
         message: error.message || "An unexpected error occurred",
         details: "Please try again later or contact support if the problem persists."
       });
@@ -392,7 +623,7 @@ export const reportController = {
       };
 
       const reports = await Report.find(query).sort({ updatedAt: -1 });
-      
+
       // Get all workspaces to map workspaceId to workspace name
       const { Workspace } = await import("../models/Workspace");
       const workspaces = await Workspace.find({ domain: req.user?.domain || req.userDomain });

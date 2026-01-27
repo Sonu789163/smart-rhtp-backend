@@ -7,11 +7,14 @@ const express_1 = __importDefault(require("express"));
 const chatController_1 = require("../controllers/chatController");
 const auth_1 = require("../middleware/auth");
 const domainAuth_1 = require("../middleware/domainAuth");
+const linkAccess_1 = require("../middleware/linkAccess");
 const rateLimitByWorkspace_1 = require("../middleware/rateLimitByWorkspace");
 const router = express_1.default.Router();
-// Apply auth middleware to all routes
+// Process link access FIRST so downstream middlewares can use it
+router.use(linkAccess_1.linkAccess);
+// Apply auth middleware to all routes (skipped when linkToken present)
 router.use(auth_1.authMiddleware);
-// Apply domain middleware to all routes
+// Apply domain middleware to all routes (respects link access domain)
 router.use(domainAuth_1.domainAuthMiddleware);
 // Get all chats for the user
 router.get("/", chatController_1.chatController.getAll);

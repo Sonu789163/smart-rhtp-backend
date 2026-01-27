@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireDirectoryPermission = requireDirectoryPermission;
 exports.requireBodyDocumentPermission = requireBodyDocumentPermission;
@@ -54,17 +87,40 @@ async function getUserRoleForDirectory(req, directoryId) {
     return "none";
 }
 async function getUserRoleForDocument(req, documentId) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     // Admins are owners
     if (((_a = req.user) === null || _a === void 0 ? void 0 : _a.role) === "admin")
         return "owner";
     const domain = req.userDomain;
-    const doc = await Document_1.Document.findOne({ id: documentId, domain });
+    let doc = await Document_1.Document.findOne({ id: documentId, domain });
+    // If not found in current domain, check if it's in a shared directory's original directory
+    if (!doc && req.currentWorkspace) {
+        const { Directory } = await Promise.resolve().then(() => __importStar(require("../models/Directory")));
+        const sharedDirectories = await Directory.find({
+            workspaceId: req.currentWorkspace,
+            isShared: true,
+        });
+        for (const sharedDir of sharedDirectories) {
+            if (sharedDir.sharedFromDomain && sharedDir.sharedFromWorkspaceId) {
+                const originalDoc = await Document_1.Document.findOne({
+                    id: documentId,
+                    domain: sharedDir.sharedFromDomain,
+                    workspaceId: sharedDir.sharedFromWorkspaceId,
+                });
+                if (originalDoc) {
+                    if (!sharedDir.sharedFromDirectoryId || originalDoc.directoryId === sharedDir.sharedFromDirectoryId) {
+                        doc = originalDoc;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     if (!doc)
         return "none";
     // All workspace members get editor access to documents in their workspace
     const currentWorkspace = req.currentWorkspace || domain;
-    if (doc.workspaceId === currentWorkspace) {
+    if (doc.workspaceId === currentWorkspace && doc.domain === domain) {
         return "editor";
     }
     // Link access
@@ -83,16 +139,68 @@ async function getUserRoleForDocument(req, documentId) {
             return link.role;
         }
     }
+    // Check if user has access via shared directory
+    if (doc.directoryId && req.currentWorkspace) {
+        const { Directory } = await Promise.resolve().then(() => __importStar(require("../models/Directory")));
+        const { SharePermission } = await Promise.resolve().then(() => __importStar(require("../models/SharePermission")));
+        // Check if there's a shared directory pointing to this document's directory
+        const sharedDir = await Directory.findOne({
+            workspaceId: req.currentWorkspace,
+            sharedFromDirectoryId: doc.directoryId,
+            isShared: true,
+        });
+        if (sharedDir) {
+            const userId = (_d = (_c = (_b = req.user) === null || _b === void 0 ? void 0 : _b._id) === null || _c === void 0 ? void 0 : _c.toString) === null || _d === void 0 ? void 0 : _d.call(_c);
+            const userEmail = (_f = (_e = req.user) === null || _e === void 0 ? void 0 : _e.email) === null || _f === void 0 ? void 0 : _f.toLowerCase();
+            // Check if user is the recipient
+            if (userId && sharedDir.sharedWithUserId === userId) {
+                return "viewer"; // Shared directories typically give viewer access
+            }
+            // Check SharePermission for the original directory
+            if (userId) {
+                const userShare = await SharePermission.findOne({
+                    domain: doc.domain,
+                    resourceType: "directory",
+                    resourceId: doc.directoryId,
+                    scope: "user",
+                    principalId: userId,
+                });
+                if (userShare)
+                    return userShare.role;
+            }
+            if (userEmail) {
+                const emailShare = await SharePermission.findOne({
+                    domain: doc.domain,
+                    resourceType: "directory",
+                    resourceId: doc.directoryId,
+                    scope: "user",
+                    invitedEmail: userEmail,
+                });
+                if (emailShare)
+                    return emailShare.role;
+            }
+            // Check workspace share
+            const wsShare = await SharePermission.findOne({
+                domain: doc.domain,
+                resourceType: "directory",
+                resourceId: doc.directoryId,
+                scope: "workspace",
+                principalId: currentWorkspace,
+            });
+            if (wsShare)
+                return wsShare.role;
+        }
+    }
     // Direct share for user
-    const userId = (_d = (_c = (_b = req.user) === null || _b === void 0 ? void 0 : _b._id) === null || _c === void 0 ? void 0 : _c.toString) === null || _d === void 0 ? void 0 : _d.call(_c);
+    const userId = (_j = (_h = (_g = req.user) === null || _g === void 0 ? void 0 : _g._id) === null || _h === void 0 ? void 0 : _h.toString) === null || _j === void 0 ? void 0 : _j.call(_h);
     if (userId) {
-        const share = await SharePermission_1.SharePermission.findOne({ domain, resourceType: "document", resourceId: documentId, scope: "user", principalId: userId });
+        const share = await SharePermission_1.SharePermission.findOne({ domain: doc.domain, resourceType: "document", resourceId: documentId, scope: "user", principalId: userId });
         if (share)
             return share.role;
     }
     // Workspace share
     const workspaceKey = req.currentWorkspace || domain;
-    const wsShare = await SharePermission_1.SharePermission.findOne({ domain, resourceType: "document", resourceId: documentId, scope: "workspace", principalId: workspaceKey });
+    const wsShare = await SharePermission_1.SharePermission.findOne({ domain: doc.domain, resourceType: "document", resourceId: documentId, scope: "workspace", principalId: workspaceKey });
     if (wsShare)
         return wsShare.role;
     return "none";

@@ -34,7 +34,10 @@ export function rateLimitByWorkspace(
     | "document:create"
     | "document:upload"
     | "chat:create"
+    | "chat:message"
     | "report:create"
+    | "report:compare"
+    | "summary:trigger"
     | "workspace:invite",
   limit: number,
   windowMs: number

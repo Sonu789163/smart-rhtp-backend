@@ -114,6 +114,25 @@ router.get("/callback", async (req, res) => {
         user.domain = getPrimaryDomain(user.email) || user.domain;
       }
       await user.save();
+      
+      // Link SharePermissions by email to user ID (for cross-domain shares)
+      const { SharePermission } = await import("../models/SharePermission");
+      const userEmail = user.email?.toLowerCase();
+      const userId = user._id.toString();
+      if (userEmail) {
+        await SharePermission.updateMany(
+          {
+            invitedEmail: userEmail,
+            scope: "user",
+            $or: [
+              { principalId: null },
+              { principalId: { $exists: false } },
+              { principalId: "" }
+            ]
+          },
+          { $set: { principalId: userId } }
+        );
+      }
     }
 
     // Generate JWT token

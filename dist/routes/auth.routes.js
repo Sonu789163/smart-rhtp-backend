@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -35,6 +68,7 @@ router.get("/microsoft", (req, res) => {
 // Exchanges the authorization code for tokens, upserts a user, and redirects
 // back to the frontend with app JWTs in the query string.
 router.get("/callback", async (req, res) => {
+    var _a;
     try {
         const { code } = req.query;
         if (!code) {
@@ -102,6 +136,21 @@ router.get("/callback", async (req, res) => {
                 user.domain = (0, domainConfig_1.getPrimaryDomain)(user.email) || user.domain;
             }
             await user.save();
+            // Link SharePermissions by email to user ID (for cross-domain shares)
+            const { SharePermission } = await Promise.resolve().then(() => __importStar(require("../models/SharePermission")));
+            const userEmail = (_a = user.email) === null || _a === void 0 ? void 0 : _a.toLowerCase();
+            const userId = user._id.toString();
+            if (userEmail) {
+                await SharePermission.updateMany({
+                    invitedEmail: userEmail,
+                    scope: "user",
+                    $or: [
+                        { principalId: null },
+                        { principalId: { $exists: false } },
+                        { principalId: "" }
+                    ]
+                }, { $set: { principalId: userId } });
+            }
         }
         // Generate JWT token
         const token = jsonwebtoken_1.default.sign({

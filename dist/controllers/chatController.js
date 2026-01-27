@@ -36,21 +36,29 @@ exports.chatController = {
     async getByDocumentId(req, res) {
         var _a, _b;
         try {
+            const linkAccess = req.linkAccess;
             const currentWorkspace = req.currentWorkspace || req.userDomain;
             const query = {
                 documentId: req.params.documentId,
-                domain: req.userDomain, // Filter by user's domain
+                domain: req.userDomain, // Filter by user's domain (or link domain)
                 workspaceId: currentWorkspace, // Ensure same workspace
             };
-            // Always scope to requesting user
-            if ((_a = req.user) === null || _a === void 0 ? void 0 : _a.microsoftId) {
-                query.microsoftId = req.user.microsoftId;
-            }
-            else if ((_b = req.user) === null || _b === void 0 ? void 0 : _b._id) {
-                query.userId = req.user._id.toString();
+            // Handle link access - allow access to chats for linked document
+            if (linkAccess && linkAccess.resourceType === "document" && linkAccess.resourceId === req.params.documentId) {
+                // For link access, don't filter by user - show all chats for the document
+                // This allows shared document recipients to see existing chats
             }
             else {
-                return res.status(400).json({ error: "No user identifier found" });
+                // Always scope to requesting user for normal access
+                if ((_a = req.user) === null || _a === void 0 ? void 0 : _a.microsoftId) {
+                    query.microsoftId = req.user.microsoftId;
+                }
+                else if ((_b = req.user) === null || _b === void 0 ? void 0 : _b._id) {
+                    query.userId = req.user._id.toString();
+                }
+                else {
+                    return res.status(400).json({ error: "No user identifier found" });
+                }
             }
             const chats = await Chat_1.Chat.find(query).sort({ updatedAt: -1 });
             res.json(chats);

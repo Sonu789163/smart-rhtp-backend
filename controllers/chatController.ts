@@ -3,6 +3,7 @@ import { Chat } from "../models/Chat";
 import { Document } from "../models/Document";
 import { User } from "../models/User";
 import { io } from "../index";
+import axios from "axios";
 
 interface AuthRequest extends Request {
   user?: any;
@@ -11,6 +12,47 @@ interface AuthRequest extends Request {
 }
 
 export const chatController = {
+  async sendMessage(req: AuthRequest, res: Response) {
+    try {
+      const { message, namespace, documentType, history, sessionId } = req.body;
+
+      if (!message || !namespace || !documentType) {
+        return res.status(400).json({ error: "Missing required fields (message, namespace, documentType)" });
+      }
+
+      const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+
+      console.log(`Forwarding chat query to Python: ${namespace}`);
+
+      const payload = {
+        message,
+        namespace,
+        document_type: documentType,
+        history: history || [],
+        authorization: req.headers.authorization,
+        sessionId: sessionId
+      };
+
+      const pythonResponse = await axios.post(`${pythonApiUrl}/chats/query`, payload, {
+        timeout: 60000 // Chat might take a while
+      });
+
+      if (pythonResponse.data && pythonResponse.data.status === "success") {
+        return res.json({
+          response: pythonResponse.data.output,
+          job_id: pythonResponse.data.job_id,
+          usage: pythonResponse.data.usage,
+          duration: pythonResponse.data.duration
+        });
+      }
+
+      res.status(500).json({ error: "Failed to get response from Chat AI", details: pythonResponse.data });
+    } catch (error: any) {
+      console.error("Error in sendMessage:", error.message);
+      res.status(500).json({ error: "Chat processing failed", message: error.message });
+    }
+  },
+
   async getAll(req: AuthRequest, res: Response) {
     try {
       // Get current workspace from request
@@ -40,20 +82,27 @@ export const chatController = {
 
   async getByDocumentId(req: AuthRequest, res: Response) {
     try {
+      const linkAccess = (req as any).linkAccess;
       const currentWorkspace = req.currentWorkspace || req.userDomain;
       const query: any = {
         documentId: req.params.documentId,
-        domain: req.userDomain, // Filter by user's domain
+        domain: req.userDomain, // Filter by user's domain (or link domain)
         workspaceId: currentWorkspace, // Ensure same workspace
       };
 
-      // Always scope to requesting user
-      if (req.user?.microsoftId) {
-        query.microsoftId = req.user.microsoftId;
-      } else if (req.user?._id) {
-        query.userId = req.user._id.toString();
+      // Handle link access - allow access to chats for linked document
+      if (linkAccess && linkAccess.resourceType === "document" && linkAccess.resourceId === req.params.documentId) {
+        // For link access, don't filter by user - show all chats for the document
+        // This allows shared document recipients to see existing chats
       } else {
-        return res.status(400).json({ error: "No user identifier found" });
+        // Always scope to requesting user for normal access
+        if (req.user?.microsoftId) {
+          query.microsoftId = req.user.microsoftId;
+        } else if (req.user?._id) {
+          query.userId = req.user._id.toString();
+        } else {
+          return res.status(400).json({ error: "No user identifier found" });
+        }
       }
 
       const chats = await Chat.find(query).sort({ updatedAt: -1 });

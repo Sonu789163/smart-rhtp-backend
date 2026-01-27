@@ -108,6 +108,49 @@ export const workspaceInvitationController = {
         });
       }
 
+      // Validate grantedDirectories if provided
+      // Ensure that only selected directories are granted access
+      if (grantedDirectories && Array.isArray(grantedDirectories)) {
+        if (grantedDirectories.length === 0) {
+          return res.status(400).json({
+            message: "At least one directory must be selected to grant access",
+          });
+        }
+
+        // Validate that all directory IDs exist and belong to the workspace domain
+        for (const dirAccess of grantedDirectories) {
+          if (!dirAccess.directoryId) {
+            return res.status(400).json({
+              message: "Invalid directory ID in grantedDirectories",
+            });
+          }
+
+          // Check if directory exists in the workspace domain
+          const directory = await Directory.findOne({
+            id: dirAccess.directoryId,
+            domain: userDomain,
+          });
+
+          if (!directory) {
+            return res.status(400).json({
+              message: `Directory with ID ${dirAccess.directoryId} not found in your workspace`,
+            });
+          }
+
+          // Validate role
+          if (dirAccess.role && !["viewer", "editor"].includes(dirAccess.role)) {
+            return res.status(400).json({
+              message: `Invalid role "${dirAccess.role}" for directory. Must be "viewer" or "editor"`,
+            });
+          }
+        }
+      } else if (grantedDirectories !== undefined) {
+        // If grantedDirectories is provided but not an array
+        return res.status(400).json({
+          message: "grantedDirectories must be an array",
+        });
+      }
+
       // Create invitation
       const invitationId = `inv_${Date.now()}_${Math.random()
         .toString(36)
@@ -197,9 +240,9 @@ export const workspaceInvitationController = {
       }
 
       // Query by workspaceId (more reliable than workspaceDomain for cross-domain scenarios)
+      // Show all invitations for the workspace, not just those sent by the current admin
       const invitations = await WorkspaceInvitation.find({
         workspaceId: currentWorkspaceId,
-        inviterId: req.user._id,
       })
         .sort({ createdAt: -1 })
         .populate("inviterId", "name email");
