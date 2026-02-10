@@ -1,13 +1,52 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.workspaceInvitationController = void 0;
+const mongoose_1 = __importDefault(require("mongoose"));
 const User_1 = require("../models/User");
 const WorkspaceInvitation_1 = require("../models/WorkspaceInvitation");
 const SharePermission_1 = require("../models/SharePermission");
 const Directory_1 = require("../models/Directory");
+const Document_1 = require("../models/Document");
 const Workspace_1 = require("../models/Workspace");
 const WorkspaceMembership_1 = require("../models/WorkspaceMembership");
 const emailService_1 = require("../services/emailService");
+const auditLogger_1 = require("../lib/auditLogger");
 exports.workspaceInvitationController = {
     // Send workspace invitation
     async sendInvitation(req, res) {
@@ -102,6 +141,8 @@ exports.workspaceInvitationController = {
                     : [],
             });
             await invitation.save();
+            // Log activity
+            await auditLogger_1.auditLogger.logInvitationSent(inviterId.toString(), invitation.invitationId, inviteeEmail.toLowerCase(), workspace.workspaceId, workspace.name, userDomain, invitedRole);
             // Send invitation email
             try {
                 await sendInvitationEmail(invitation);
@@ -247,14 +288,19 @@ exports.workspaceInvitationController = {
                 });
             }
             // Create workspace membership
-            // Map invitation role to membership role (invitedRole is user/viewer/editor, membership uses member/viewer/admin)
-            let membershipRole = "member";
+            // Map invitation role to membership role (standardized mapping)
+            // invitedRole: "user" | "viewer" | "editor" → membershipRole: "editor" | "viewer" | "admin"
+            let membershipRole = "editor";
             if (invitation.invitedRole === "viewer") {
                 membershipRole = "viewer";
             }
             else if (invitation.invitedRole === "editor") {
-                membershipRole = "member"; // Editor maps to member in membership
+                membershipRole = "editor"; // Editor maps to editor (consistent naming)
             }
+            else if (invitation.invitedRole === "user") {
+                membershipRole = "editor"; // "user" maps to "editor" (can edit documents)
+            }
+            // Note: "admin" role can only be granted by domain admins, not through invitations
             const membership = new WorkspaceMembership_1.WorkspaceMembership({
                 userId: user._id,
                 workspaceId: invitation.workspaceId,
@@ -264,6 +310,12 @@ exports.workspaceInvitationController = {
                 status: "active",
             });
             await membership.save();
+            // Log activity
+            const workspace = await Workspace_1.Workspace.findOne({ workspaceId: invitation.workspaceId });
+            const inviter = await User_1.User.findById(invitation.inviterId);
+            await auditLogger_1.auditLogger.logMemberAdded(invitation.inviterId.toString(), user._id.toString(), invitation.workspaceId, (workspace === null || workspace === void 0 ? void 0 : workspace.name) || invitation.workspaceName, (workspace === null || workspace === void 0 ? void 0 : workspace.domain) || (inviter === null || inviter === void 0 ? void 0 : inviter.domain) || "unknown", membershipRole);
+            // Log invitation acceptance
+            await auditLogger_1.auditLogger.logInvitationAccepted(user._id.toString(), invitation.invitationId, invitation.workspaceId, invitation.workspaceName, (workspace === null || workspace === void 0 ? void 0 : workspace.domain) || (inviter === null || inviter === void 0 ? void 0 : inviter.domain) || "unknown");
             // Set as current workspace if user doesn't have one
             if (!user.currentWorkspace) {
                 user.currentWorkspace = invitation.workspaceId;
@@ -318,16 +370,20 @@ exports.workspaceInvitationController = {
                                     .toString(36)
                                     .substr(2, 9)}`;
                                 console.log(`[acceptInvitation] Creating SharePermission for directory ${dirAccess.directoryId}, userId: ${userIdString}, domain: ${actualDomain}`);
-                                // Use updateOne with upsert to avoid duplicate key errors
-                                // This ensures we don't create duplicates even if the index constraint is violated
-                                const result = await SharePermission_1.SharePermission.updateOne({
-                                    domain: actualDomain,
-                                    resourceType: "directory",
-                                    resourceId: dirAccess.directoryId,
-                                    scope: "user",
-                                    principalId: userIdString,
-                                }, {
-                                    $setOnInsert: {
+                                // Use native MongoDB insert to bypass old index issues (same as script)
+                                try {
+                                    // Clean up any existing SharePermissions with null linkToken
+                                    await SharePermission_1.SharePermission.deleteMany({
+                                        domain: actualDomain,
+                                        resourceType: "directory",
+                                        resourceId: dirAccess.directoryId,
+                                        scope: "user",
+                                        principalId: userIdString,
+                                        linkToken: null,
+                                    });
+                                    // Create SharePermission using native MongoDB insert
+                                    const uniqueLinkToken = `user_${shareId}`;
+                                    const sharePermissionDoc = {
                                         id: shareId,
                                         resourceType: "directory",
                                         resourceId: dirAccess.directoryId,
@@ -337,23 +393,50 @@ exports.workspaceInvitationController = {
                                         role: dirAccess.role,
                                         invitedEmail: invitation.inviteeEmail,
                                         createdBy: invitation.inviterId.toString(),
-                                        // Don't set linkToken at all - let it be undefined for user-scoped shares
-                                        // This avoids the sparse unique index conflict
-                                    },
-                                }, { upsert: true });
-                                console.log(`[acceptInvitation] SharePermission upsert result:`, result);
-                                // Verify it was created
-                                const verifyShare = await SharePermission_1.SharePermission.findOne({
-                                    resourceType: "directory",
-                                    resourceId: dirAccess.directoryId,
-                                    scope: "user",
-                                    principalId: userIdString,
-                                });
-                                if (verifyShare) {
-                                    console.log(`[acceptInvitation] ✓ SharePermission verified: ${verifyShare.id}, domain: ${verifyShare.domain}`);
+                                        linkToken: uniqueLinkToken, // Set unique value to bypass old index
+                                        createdAt: new Date(),
+                                        updatedAt: new Date(),
+                                    };
+                                    // Use native MongoDB collection to insert directly
+                                    const collection = mongoose_1.default.connection.db.collection("sharepermissions");
+                                    await collection.insertOne(sharePermissionDoc);
+                                    // Verify it was created
+                                    const verifyShare = await SharePermission_1.SharePermission.findOne({
+                                        domain: actualDomain,
+                                        resourceType: "directory",
+                                        resourceId: dirAccess.directoryId,
+                                        scope: "user",
+                                        principalId: userIdString,
+                                    });
+                                    if (verifyShare) {
+                                        console.log(`[acceptInvitation] ✓ SharePermission created and verified: ${verifyShare.id}, domain: ${verifyShare.domain}`);
+                                    }
+                                    else {
+                                        throw new Error("SharePermission was not created despite insertOne success");
+                                    }
                                 }
-                                else {
-                                    console.log(`[acceptInvitation] ✗ SharePermission NOT found after creation!`);
+                                catch (insertError) {
+                                    // Handle duplicate key error gracefully
+                                    if (insertError.code === 11000) {
+                                        const verifyShare = await SharePermission_1.SharePermission.findOne({
+                                            domain: actualDomain,
+                                            resourceType: "directory",
+                                            resourceId: dirAccess.directoryId,
+                                            scope: "user",
+                                            principalId: userIdString,
+                                        });
+                                        if (verifyShare) {
+                                            console.log(`[acceptInvitation] SharePermission already exists (duplicate key handled)`);
+                                        }
+                                        else {
+                                            console.error(`[acceptInvitation] Error creating SharePermission: ${insertError.message}`);
+                                            throw insertError;
+                                        }
+                                    }
+                                    else {
+                                        console.error(`[acceptInvitation] Error creating SharePermission: ${insertError.message}`);
+                                        throw insertError;
+                                    }
                                 }
                             }
                             else {
@@ -524,7 +607,7 @@ exports.workspaceInvitationController = {
                 allWorkspacesMap.set(ws.workspaceId, {
                     workspaceDomain: ws.workspaceId,
                     workspaceName: ws.name,
-                    role: (membership === null || membership === void 0 ? void 0 : membership.role) || "member",
+                    role: (membership === null || membership === void 0 ? void 0 : membership.role) || "editor",
                     isActive: true,
                 });
             });
@@ -537,7 +620,7 @@ exports.workspaceInvitationController = {
                     allWorkspacesMap.set(wsId, {
                         workspaceDomain: wsId,
                         workspaceName: legacyWs.workspaceName || legacyWs.workspaceDomain,
-                        role: legacyWs.role || "member",
+                        role: legacyWs.role || "editor",
                         isActive: true,
                     });
                 }
@@ -796,18 +879,33 @@ exports.workspaceInvitationController = {
             const user = await User_1.User.findOne({ email: userEmail.toLowerCase() });
             if (!user)
                 return res.status(404).json({ message: "User not found" });
-            // Verify user is in the workspace
-            const workspaceDomain = req.userDomain;
-            const hasWorkspaceAccess = user.accessibleWorkspaces.some((ws) => (ws.workspaceDomain || "").toLowerCase() ===
-                (workspaceDomain || "").toLowerCase() && ws.isActive);
+            // Verify user is in the workspace - use WorkspaceMembership as source of truth
+            const workspaceId = req.currentWorkspace;
+            if (!workspaceId) {
+                return res.status(400).json({ message: "Workspace context is required" });
+            }
+            // Check WorkspaceMembership first (primary source of truth)
+            const membership = await WorkspaceMembership_1.WorkspaceMembership.findOne({
+                userId: user._id,
+                workspaceId: workspaceId,
+                status: "active",
+            });
+            // Fallback to legacy accessibleWorkspaces check for backward compatibility
+            let hasWorkspaceAccess = !!membership;
+            if (!hasWorkspaceAccess) {
+                const workspaceDomain = req.userDomain;
+                hasWorkspaceAccess = (user.accessibleWorkspaces || []).some((ws) => ((ws.workspaceDomain || "").toLowerCase() ===
+                    (workspaceDomain || "").toLowerCase()) && ws.isActive !== false);
+            }
             if (!hasWorkspaceAccess) {
                 return res
                     .status(400)
                     .json({ message: "User does not have access to this workspace" });
             }
             // Use actual user domain (not workspace slug)
-            // workspaceDomain might be slug, but SharePermission uses actual domain
-            const domain = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain) || workspaceDomain;
+            // Get domain from workspace or use req.userDomain
+            const workspace = await Workspace_1.Workspace.findOne({ workspaceId: workspaceId });
+            const domain = (workspace === null || workspace === void 0 ? void 0 : workspace.domain) || req.userDomain || ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain);
             const userIdString = user._id.toString();
             const granted = [];
             const errors = [];
@@ -832,9 +930,16 @@ exports.workspaceInvitationController = {
                     });
                     if (existingShare) {
                         // Update existing share role
+                        const oldRole = existingShare.role;
                         existingShare.role = role;
                         await existingShare.save();
                         granted.push(directoryId);
+                        // Log activity if role changed
+                        if (oldRole !== role) {
+                            const workspace = await Workspace_1.Workspace.findOne({ workspaceId: req.currentWorkspace });
+                            const directory = await Directory_1.Directory.findOne({ id: directoryId, domain });
+                            await auditLogger_1.auditLogger.logDirectoryAccessGranted(req.user._id.toString(), userIdString, directoryId, (directory === null || directory === void 0 ? void 0 : directory.name) || directoryId, req.currentWorkspace || domain, (workspace === null || workspace === void 0 ? void 0 : workspace.name) || req.currentWorkspace || domain, domain, role);
+                        }
                     }
                     else {
                         // Create new share using updateOne with upsert to avoid duplicate key errors
@@ -842,27 +947,50 @@ exports.workspaceInvitationController = {
                             .toString(36)
                             .substr(2, 9)}`;
                         try {
-                            await SharePermission_1.SharePermission.updateOne({
+                            // Clean up any existing SharePermissions with null linkToken
+                            await SharePermission_1.SharePermission.deleteMany({
                                 domain,
                                 resourceType: "directory",
                                 resourceId: directoryId,
                                 scope: "user",
                                 principalId: userIdString,
-                            }, {
-                                $setOnInsert: {
-                                    id: shareId,
-                                    resourceType: "directory",
-                                    resourceId: directoryId,
-                                    domain,
-                                    scope: "user",
-                                    principalId: userIdString,
-                                    role,
-                                    invitedEmail: userEmail.toLowerCase(),
-                                    createdBy: req.user._id.toString(),
-                                    // Don't set linkToken - let it be undefined for user-scoped shares
-                                },
-                            }, { upsert: true });
+                                linkToken: null,
+                            });
+                            // Use native MongoDB insert to bypass old index issues (same as script)
+                            const uniqueLinkToken = `user_${shareId}`;
+                            const sharePermissionDoc = {
+                                id: shareId,
+                                resourceType: "directory",
+                                resourceId: directoryId,
+                                domain,
+                                scope: "user",
+                                principalId: userIdString,
+                                role,
+                                invitedEmail: userEmail.toLowerCase(),
+                                createdBy: req.user._id.toString(),
+                                linkToken: uniqueLinkToken, // Set unique value to bypass old index
+                                createdAt: new Date(),
+                                updatedAt: new Date(),
+                            };
+                            // Use native MongoDB collection to insert directly
+                            const collection = mongoose_1.default.connection.db.collection("sharepermissions");
+                            await collection.insertOne(sharePermissionDoc);
+                            // Verify it was created
+                            const verifyShare = await SharePermission_1.SharePermission.findOne({
+                                domain,
+                                resourceType: "directory",
+                                resourceId: directoryId,
+                                scope: "user",
+                                principalId: userIdString,
+                            });
+                            if (!verifyShare) {
+                                throw new Error("SharePermission was not created despite insertOne success");
+                            }
                             granted.push(directoryId);
+                            // Log activity
+                            const workspace = await Workspace_1.Workspace.findOne({ workspaceId: req.currentWorkspace });
+                            const directory = await Directory_1.Directory.findOne({ id: directoryId, domain });
+                            await auditLogger_1.auditLogger.logDirectoryAccessGranted(req.user._id.toString(), userIdString, directoryId, (directory === null || directory === void 0 ? void 0 : directory.name) || directoryId, req.currentWorkspace || domain, (workspace === null || workspace === void 0 ? void 0 : workspace.name) || req.currentWorkspace || domain, domain, role);
                         }
                         catch (saveError) {
                             // Handle duplicate key error gracefully
@@ -928,6 +1056,10 @@ exports.workspaceInvitationController = {
                 });
             }
             await SharePermission_1.SharePermission.deleteOne({ _id: share._id });
+            // Log activity
+            const workspace = await Workspace_1.Workspace.findOne({ workspaceId: req.currentWorkspace });
+            const directory = await Directory_1.Directory.findOne({ id: directoryId, domain });
+            await auditLogger_1.auditLogger.logDirectoryAccessRevoked(req.user._id.toString(), userIdString, directoryId, (directory === null || directory === void 0 ? void 0 : directory.name) || directoryId, req.currentWorkspace || domain, (workspace === null || workspace === void 0 ? void 0 : workspace.name) || req.currentWorkspace || domain, domain);
             return res.json({ message: "Directory access revoked" });
         }
         catch (error) {
@@ -961,8 +1093,10 @@ exports.workspaceInvitationController = {
             const workspace = await Workspace_1.Workspace.findOne({ workspaceId: currentWorkspaceId });
             const workspaceDomain = (workspace === null || workspace === void 0 ? void 0 : workspace.domain) || ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain) || req.userDomain;
             const userIdString = user._id.toString();
-            // Get all user-scoped shares for this user (any domain, but check workspace domain first)
+            // Get all user-scoped shares for this user in the workspace domain
+            // Include domain in query to match SharePermissions created with domain
             const shares = await SharePermission_1.SharePermission.find({
+                domain: workspaceDomain,
                 resourceType: "directory",
                 scope: "user",
                 principalId: userIdString,
@@ -989,6 +1123,7 @@ exports.workspaceInvitationController = {
                 directoryName: (directory === null || directory === void 0 ? void 0 : directory.name) || "Unknown",
                 role: share.role,
                 shareId: share.id,
+                grantedAt: share.createdAt || new Date(),
                 createdAt: share.createdAt,
             }));
             return res.json({ directories: directoriesWithAccess });
@@ -998,6 +1133,353 @@ exports.workspaceInvitationController = {
             return res
                 .status(500)
                 .json({ message: "Failed to fetch user directories" });
+        }
+    },
+    // Admin: Get all workspace members with their roles and permissions
+    async getWorkspaceMembers(req, res) {
+        try {
+            if (req.user.role !== "admin") {
+                return res.status(403).json({ message: "Only admins can view workspace members" });
+            }
+            const currentWorkspaceId = req.currentWorkspace;
+            if (!currentWorkspaceId) {
+                return res.status(400).json({ message: "Workspace context required" });
+            }
+            // Get all active memberships for this workspace
+            const memberships = await WorkspaceMembership_1.WorkspaceMembership.find({
+                workspaceId: currentWorkspaceId,
+                status: "active",
+            }).populate("userId", "name email domain role");
+            // Get workspace invitations for pending members
+            const pendingInvitations = await WorkspaceInvitation_1.WorkspaceInvitation.find({
+                workspaceId: currentWorkspaceId,
+                status: "pending",
+            });
+            // Get directory access for each member
+            const membersWithPermissions = await Promise.all(memberships.map(async (membership) => {
+                var _a;
+                const user = membership.userId;
+                if (!user)
+                    return null;
+                // Get directory-level permissions
+                const directoryShares = await SharePermission_1.SharePermission.find({
+                    scope: "user",
+                    principalId: user._id.toString(),
+                    resourceType: "directory",
+                }).populate("resourceId");
+                return {
+                    userId: user._id.toString(),
+                    email: user.email,
+                    name: user.name,
+                    domain: user.domain,
+                    workspaceRole: membership.role, // admin, editor, viewer
+                    joinedAt: membership.joinedAt,
+                    invitedBy: (_a = membership.invitedBy) === null || _a === void 0 ? void 0 : _a.toString(),
+                    directoryAccess: directoryShares.map((share) => ({
+                        directoryId: share.resourceId,
+                        role: share.role, // editor, viewer
+                        grantedAt: share.createdAt,
+                    })),
+                };
+            }));
+            // Format pending invitations
+            const pendingMembers = pendingInvitations.map((invitation) => ({
+                invitationId: invitation.invitationId,
+                email: invitation.inviteeEmail,
+                name: invitation.inviteeName,
+                workspaceRole: invitation.invitedRole, // user, viewer, editor
+                invitedAt: invitation.createdAt,
+                invitedBy: invitation.inviterId.toString(),
+                directoryAccess: invitation.grantedDirectories || [],
+                expiresAt: invitation.expiresAt,
+            }));
+            return res.json({
+                members: membersWithPermissions.filter((m) => m !== null),
+                pending: pendingMembers,
+            });
+        }
+        catch (error) {
+            console.error("Error fetching workspace members:", error);
+            return res.status(500).json({ message: "Failed to fetch workspace members" });
+        }
+    },
+    // Admin: Update workspace member role
+    async updateMemberRole(req, res) {
+        var _a;
+        try {
+            if (req.user.role !== "admin") {
+                return res.status(403).json({ message: "Only admins can update member roles" });
+            }
+            const currentWorkspaceId = req.currentWorkspace;
+            if (!currentWorkspaceId) {
+                return res.status(400).json({ message: "Workspace context required" });
+            }
+            const { userId, role } = req.body;
+            if (!userId || !role) {
+                return res.status(400).json({ message: "userId and role are required" });
+            }
+            // Validate role
+            if (!["admin", "editor", "viewer"].includes(role)) {
+                return res.status(400).json({ message: "Invalid role. Must be admin, editor, or viewer" });
+            }
+            // Check if user is trying to update themselves
+            if (userId === req.user._id.toString()) {
+                return res.status(400).json({ message: "Cannot update your own role" });
+            }
+            // Find membership
+            const membership = await WorkspaceMembership_1.WorkspaceMembership.findOne({
+                userId,
+                workspaceId: currentWorkspaceId,
+                status: "active",
+            });
+            if (!membership) {
+                return res.status(404).json({ message: "Member not found in this workspace" });
+            }
+            // Get old role for audit log
+            const oldRole = membership.role;
+            // Update role
+            membership.role = role;
+            await membership.save();
+            // Log activity
+            const workspace = await Workspace_1.Workspace.findOne({ workspaceId: currentWorkspaceId });
+            await auditLogger_1.auditLogger.logRoleChange(req.user._id.toString(), userId, currentWorkspaceId, (workspace === null || workspace === void 0 ? void 0 : workspace.name) || currentWorkspaceId, (workspace === null || workspace === void 0 ? void 0 : workspace.domain) || req.userDomain || ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain), oldRole, role);
+            return res.json({
+                message: "Member role updated successfully",
+                membership: {
+                    userId: membership.userId.toString(),
+                    workspaceId: membership.workspaceId,
+                    role: membership.role,
+                },
+            });
+        }
+        catch (error) {
+            console.error("Error updating member role:", error);
+            return res.status(500).json({ message: "Failed to update member role" });
+        }
+    },
+    // Admin: Remove member from workspace
+    async removeWorkspaceMember(req, res) {
+        var _a, _b;
+        try {
+            if (req.user.role !== "admin") {
+                return res.status(403).json({ message: "Only admins can remove members" });
+            }
+            const currentWorkspaceId = req.currentWorkspace;
+            if (!currentWorkspaceId) {
+                return res.status(400).json({ message: "Workspace context required" });
+            }
+            const { userId } = req.params;
+            if (!userId) {
+                return res.status(400).json({ message: "userId is required" });
+            }
+            // Check if user is trying to remove themselves
+            if (userId === req.user._id.toString()) {
+                return res.status(400).json({ message: "Cannot remove yourself from workspace" });
+            }
+            // Find membership
+            const membership = await WorkspaceMembership_1.WorkspaceMembership.findOne({
+                userId,
+                workspaceId: currentWorkspaceId,
+            });
+            if (!membership) {
+                return res.status(404).json({ message: "Member not found in this workspace" });
+            }
+            // Get workspace to find its domain
+            const workspace = await Workspace_1.Workspace.findOne({ workspaceId: currentWorkspaceId });
+            const workspaceDomain = (workspace === null || workspace === void 0 ? void 0 : workspace.domain) || req.userDomain || ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain);
+            // Suspend membership
+            membership.status = "suspended";
+            await membership.save();
+            // Update user's currentWorkspace if it's this workspace
+            const user = await User_1.User.findById(userId);
+            if (user && user.currentWorkspace === currentWorkspaceId) {
+                // Switch to another active workspace or user's domain
+                const otherMembership = await WorkspaceMembership_1.WorkspaceMembership.findOne({
+                    userId,
+                    status: "active",
+                    workspaceId: { $ne: currentWorkspaceId },
+                });
+                if (otherMembership) {
+                    user.currentWorkspace = otherMembership.workspaceId;
+                }
+                else {
+                    user.currentWorkspace = user.domain;
+                }
+                await user.save();
+            }
+            // Remove all SharePermissions for this user in this workspace's directories
+            const directories = await Directory_1.Directory.find({
+                workspaceId: currentWorkspaceId,
+                domain: workspaceDomain,
+            });
+            for (const directory of directories) {
+                await SharePermission_1.SharePermission.deleteMany({
+                    domain: workspaceDomain,
+                    resourceType: "directory",
+                    resourceId: directory.id,
+                    scope: "user",
+                    principalId: userId,
+                });
+            }
+            // Delete workspace invitations for this user
+            await WorkspaceInvitation_1.WorkspaceInvitation.deleteMany({
+                workspaceId: currentWorkspaceId,
+                inviteeEmail: (_b = user === null || user === void 0 ? void 0 : user.email) === null || _b === void 0 ? void 0 : _b.toLowerCase(),
+            });
+            // Log activity
+            await auditLogger_1.auditLogger.logMemberRemoved(req.user._id.toString(), userId, currentWorkspaceId, (workspace === null || workspace === void 0 ? void 0 : workspace.name) || currentWorkspaceId, workspaceDomain);
+            return res.json({
+                message: "Member removed from workspace successfully",
+            });
+        }
+        catch (error) {
+            console.error("Error removing workspace member:", error);
+            return res.status(500).json({ message: "Failed to remove workspace member" });
+        }
+    },
+    // Admin: Get activity log for workspace
+    async getActivityLog(req, res) {
+        try {
+            if (req.user.role !== "admin") {
+                return res.status(403).json({ message: "Only admins can view activity logs" });
+            }
+            const currentWorkspaceId = req.currentWorkspace;
+            if (!currentWorkspaceId) {
+                return res.status(400).json({ message: "Workspace context required" });
+            }
+            const { page, pageSize, action, targetUserId } = req.query;
+            const { ActivityLog } = await Promise.resolve().then(() => __importStar(require("../models/ActivityLog")));
+            const query = {
+                workspaceId: currentWorkspaceId,
+            };
+            if (action) {
+                query.action = action;
+            }
+            if (targetUserId) {
+                query.targetUserId = targetUserId;
+            }
+            const pageNum = page ? parseInt(page) : 1;
+            const pageSizeNum = pageSize ? parseInt(pageSize) : 50;
+            const skip = (pageNum - 1) * pageSizeNum;
+            const limit = pageSizeNum;
+            const [logs, total] = await Promise.all([
+                ActivityLog.find(query)
+                    .sort({ timestamp: -1 })
+                    .skip(skip)
+                    .limit(limit)
+                    .populate("performedBy", "name email")
+                    .populate("targetUserId", "name email"),
+                ActivityLog.countDocuments(query),
+            ]);
+            return res.json({
+                logs,
+                pagination: {
+                    page: pageNum,
+                    pageSize: pageSizeNum,
+                    total,
+                    totalPages: Math.ceil(total / pageSizeNum),
+                },
+            });
+        }
+        catch (error) {
+            console.error("Error fetching activity log:", error);
+            return res.status(500).json({ message: "Failed to fetch activity log" });
+        }
+    },
+    // Admin: Get member's detailed permissions
+    async getMemberPermissions(req, res) {
+        var _a, _b;
+        try {
+            if (req.user.role !== "admin") {
+                return res.status(403).json({ message: "Only admins can view member permissions" });
+            }
+            const currentWorkspaceId = req.currentWorkspace;
+            if (!currentWorkspaceId) {
+                return res.status(400).json({ message: "Workspace context required" });
+            }
+            const { userId } = req.params;
+            if (!userId) {
+                return res.status(400).json({ message: "userId is required" });
+            }
+            // Get membership
+            const membership = await WorkspaceMembership_1.WorkspaceMembership.findOne({
+                userId,
+                workspaceId: currentWorkspaceId,
+                status: "active",
+            }).populate("userId", "name email domain");
+            if (!membership) {
+                return res.status(404).json({ message: "Member not found in this workspace" });
+            }
+            const user = membership.userId;
+            if (!user) {
+                return res.status(404).json({ message: "User not found" });
+            }
+            // Get workspace domain
+            const workspace = await Workspace_1.Workspace.findOne({ workspaceId: currentWorkspaceId });
+            const workspaceDomain = (workspace === null || workspace === void 0 ? void 0 : workspace.domain) || req.userDomain || ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain);
+            // Get all directory permissions
+            const directoryShares = await SharePermission_1.SharePermission.find({
+                scope: "user",
+                principalId: userId,
+                resourceType: "directory",
+            });
+            // Get directory details
+            const directoryAccess = await Promise.all(directoryShares.map(async (share) => {
+                const directory = await Directory_1.Directory.findOne({
+                    id: share.resourceId,
+                    workspaceId: currentWorkspaceId,
+                });
+                return {
+                    directoryId: share.resourceId,
+                    directoryName: (directory === null || directory === void 0 ? void 0 : directory.name) || "Unknown",
+                    role: share.role,
+                    grantedAt: share.createdAt,
+                    grantedBy: share.createdBy,
+                };
+            }));
+            // Get document permissions (if any)
+            const documentShares = await SharePermission_1.SharePermission.find({
+                scope: "user",
+                principalId: userId,
+                resourceType: "document",
+            }).limit(50); // Limit to recent 50
+            const documentAccess = await Promise.all(documentShares.map(async (share) => {
+                const document = await Document_1.Document.findOne({
+                    id: share.resourceId,
+                    workspaceId: currentWorkspaceId,
+                });
+                return {
+                    documentId: share.resourceId,
+                    documentName: (document === null || document === void 0 ? void 0 : document.name) || "Unknown",
+                    role: share.role,
+                    grantedAt: share.createdAt,
+                };
+            }));
+            return res.json({
+                member: {
+                    userId: user._id.toString(),
+                    email: user.email,
+                    name: user.name,
+                    domain: user.domain,
+                    workspaceRole: membership.role,
+                    joinedAt: membership.joinedAt,
+                    invitedBy: (_b = membership.invitedBy) === null || _b === void 0 ? void 0 : _b.toString(),
+                },
+                permissions: {
+                    workspace: {
+                        role: membership.role,
+                        canInvite: membership.role === "admin",
+                        canEdit: membership.role === "admin" || membership.role === "editor",
+                        canView: true,
+                    },
+                    directories: directoryAccess,
+                    documents: documentAccess,
+                },
+            });
+        }
+        catch (error) {
+            console.error("Error fetching member permissions:", error);
+            return res.status(500).json({ message: "Failed to fetch member permissions" });
         }
     },
     // Admin: retroactively grant directory access from accepted invitation
@@ -1068,29 +1550,53 @@ exports.workspaceInvitationController = {
                         granted.push(dirAccess.directoryId);
                         continue;
                     }
-                    // Create SharePermission
+                    // Create SharePermission using compound unique index
                     const shareId = `shr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                    await SharePermission_1.SharePermission.updateOne({
-                        domain: actualDomain,
-                        resourceType: "directory",
-                        resourceId: dirAccess.directoryId,
-                        scope: "user",
-                        principalId: userIdString,
-                    }, {
-                        $setOnInsert: {
-                            id: shareId,
+                    try {
+                        await SharePermission_1.SharePermission.updateOne({
+                            domain: actualDomain,
                             resourceType: "directory",
                             resourceId: dirAccess.directoryId,
-                            domain: actualDomain,
                             scope: "user",
                             principalId: userIdString,
-                            role: dirAccess.role,
-                            invitedEmail: invitation.inviteeEmail,
-                            createdBy: invitation.inviterId.toString(),
-                        },
-                    }, { upsert: true });
-                    granted.push(dirAccess.directoryId);
-                    console.log(`[retroactivelyGrantDirectoryAccess] ✓ Created SharePermission for directory ${dirAccess.directoryId}`);
+                        }, {
+                            $setOnInsert: {
+                                id: shareId,
+                                resourceType: "directory",
+                                resourceId: dirAccess.directoryId,
+                                domain: actualDomain,
+                                scope: "user",
+                                principalId: userIdString,
+                                role: dirAccess.role,
+                                invitedEmail: invitation.inviteeEmail,
+                                createdBy: invitation.inviterId.toString(),
+                            },
+                        }, { upsert: true });
+                        granted.push(dirAccess.directoryId);
+                        console.log(`[retroactivelyGrantDirectoryAccess] ✓ Created SharePermission for directory ${dirAccess.directoryId}`);
+                    }
+                    catch (upsertError) {
+                        // Handle duplicate key error gracefully
+                        if (upsertError.code === 11000) {
+                            const verifyShare = await SharePermission_1.SharePermission.findOne({
+                                domain: actualDomain,
+                                resourceType: "directory",
+                                resourceId: dirAccess.directoryId,
+                                scope: "user",
+                                principalId: userIdString,
+                            });
+                            if (verifyShare) {
+                                console.log(`[retroactivelyGrantDirectoryAccess] SharePermission already exists for ${dirAccess.directoryId}`);
+                                granted.push(dirAccess.directoryId);
+                            }
+                            else {
+                                throw upsertError; // Re-throw if it's a different error
+                            }
+                        }
+                        else {
+                            throw upsertError;
+                        }
+                    }
                 }
                 catch (error) {
                     errors.push(`Failed to grant access to ${dirAccess.directoryId}: ${error.message}`);

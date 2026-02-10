@@ -272,15 +272,23 @@ exports.documentController = {
         }
     },
     async getById(req, res) {
+        var _a, _b;
         try {
             // Workspace is required
             const currentWorkspace = req.currentWorkspace;
             if (!currentWorkspace) {
                 return res.status(400).json({ error: "Workspace is required" });
             }
+            // Get workspace to find its domain (where documents are stored)
+            const { Workspace } = await Promise.resolve().then(() => __importStar(require("../models/Workspace")));
+            const workspace = await Workspace.findOne({ workspaceId: currentWorkspace });
+            const workspaceDomain = (workspace === null || workspace === void 0 ? void 0 : workspace.domain) || req.userDomain;
+            const userDomain = (_a = req.user) === null || _a === void 0 ? void 0 : _a.domain;
+            const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
+            const isSameDomainAdmin = ((_b = req.user) === null || _b === void 0 ? void 0 : _b.role) === "admin" && userDomain === workspaceDomain;
             const query = {
                 id: req.params.id,
-                domain: req.userDomain, // Ensure user can only access documents from their domain
+                domain: workspaceDomain, // Use workspace domain (where documents are stored)
                 workspaceId: currentWorkspace, // Ensure user can only access documents from their workspace
             };
             // Check for link access
@@ -295,9 +303,18 @@ exports.documentController = {
             if (!document) {
                 return res.status(404).json({ error: "Document not found" });
             }
+            // For cross-domain users, verify they have access to the document's directory
+            // Same-domain admins have access to all documents
+            if (!isSameDomainAdmin && isCrossDomainUser) {
+                const hasAccess = await exports.documentController.hasDirectoryAccess(req, document.directoryId || null);
+                if (!hasAccess) {
+                    return res.status(403).json({ error: "You do not have access to this document" });
+                }
+            }
             res.json(document);
         }
         catch (error) {
+            console.error("Error in getById:", error);
             res.status(500).json({ error: "Failed to fetch document" });
         }
     },
@@ -673,7 +690,7 @@ exports.documentController = {
                 });
             }
             const normalizedStatus = status.trim().toLowerCase();
-            console.log(`📥 Received status update for ${identifier}: ${normalizedStatus}`);
+            console.log(`📥 Received status update for ${identifier}: ${normalizedStatus} (type: ${req.body.type || 'unknown'})`);
             // Update document status in MongoDB - try multiple lookup methods
             try {
                 let document = await Document_1.Document.findOne({ id: identifier });
@@ -688,6 +705,17 @@ exports.documentController = {
                 // If still not found, try by _id (MongoDB ObjectId)
                 if (!document && identifier.match(/^[0-9a-fA-F]{24}$/)) {
                     document = await Document_1.Document.findById(identifier);
+                }
+                // Additional lookup: try searching by type if provided (for RHP documents)
+                if (!document && req.body.type) {
+                    document = await Document_1.Document.findOne({
+                        type: req.body.type,
+                        $or: [
+                            { id: identifier },
+                            { fileKey: identifier },
+                            { documentId: identifier }
+                        ]
+                    });
                 }
                 if (document) {
                     // Map n8n status to our document status
@@ -705,28 +733,43 @@ exports.documentController = {
                     const oldStatus = document.status;
                     const shouldUpdate = oldStatus !== newStatus || (newStatus === "completed" && oldStatus === "processing");
                     if (shouldUpdate) {
+                        // Update using both methods to ensure persistence
                         document.status = newStatus;
                         await document.save();
-                        console.log(`✅ Updated document ${document.id} (${document.name}) status from "${oldStatus}" to "${newStatus}"`);
-                        // Also try to find and update by MongoDB _id to ensure persistence
+                        console.log(`✅ Updated document ${document.id} (${document.name}, type: ${document.type}) status from "${oldStatus}" to "${newStatus}"`);
+                        // Also try to find and update by MongoDB _id to ensure persistence (especially for RHP)
                         try {
-                            await Document_1.Document.updateOne({ _id: document._id }, { $set: { status: newStatus } });
-                            console.log(`✅ Confirmed MongoDB update for document ${document.id}`);
+                            const updateResult = await Document_1.Document.updateOne({ _id: document._id }, { $set: { status: newStatus } });
+                            if (updateResult.modifiedCount > 0) {
+                                console.log(`✅ Confirmed MongoDB update for document ${document.id} (type: ${document.type})`);
+                            }
+                            else {
+                                console.log(`ℹ️ MongoDB update confirmed (no changes needed) for document ${document.id} (type: ${document.type})`);
+                            }
                         }
                         catch (updateError) {
                             console.error(`⚠️ Secondary update failed (non-critical):`, updateError);
                         }
+                        // Verify the update was persisted
+                        const verifyDoc = await Document_1.Document.findById(document._id);
+                        if (verifyDoc && verifyDoc.status === newStatus) {
+                            console.log(`✅ Verified: Document ${document.id} status is now "${verifyDoc.status}" in database`);
+                        }
+                        else {
+                            console.warn(`⚠️ Warning: Document ${document.id} status verification failed. Expected: "${newStatus}", Got: "${verifyDoc === null || verifyDoc === void 0 ? void 0 : verifyDoc.status}"`);
+                        }
                     }
                     else {
-                        console.log(`ℹ️ Document ${document.id} status unchanged: "${oldStatus}"`);
+                        console.log(`ℹ️ Document ${document.id} (type: ${document.type}) status unchanged: "${oldStatus}"`);
                     }
                     // Use the found document's id for socket emission
                     const actualJobId = document.id;
-                    index_1.io.emit("upload_status", { jobId: actualJobId, status: normalizedStatus, error });
+                    index_1.io.emit("upload_status", { jobId: actualJobId, status: newStatus, error });
                     res.status(200).json({
                         message: "Upload status update processed",
                         jobId: actualJobId,
                         documentId: document.id,
+                        documentType: document.type,
                         status: normalizedStatus,
                         previousStatus: oldStatus,
                         newStatus: newStatus,
@@ -735,7 +778,7 @@ exports.documentController = {
                 }
                 else {
                     console.warn(`⚠️ Document not found for identifier: ${identifier}`);
-                    console.warn(`   Tried: id=${identifier}, documentId=${documentId}, fileKey lookup, _id lookup`);
+                    console.warn(`   Tried: id=${identifier}, documentId=${documentId}, fileKey lookup, _id lookup, type-based lookup`);
                     // Still emit socket event even if document not found (for debugging)
                     index_1.io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: error || "Document not found" });
                     res.status(404).json({
@@ -1006,16 +1049,22 @@ exports.documentController = {
             rhpDoc.relatedDrhpId = drhpId;
             await drhpDoc.save();
             await rhpDoc.save();
-            // Publish event for the linking
-            await (0, events_1.publishEvent)({
-                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
-                domain: req.userDomain,
-                action: "documents.linked",
-                resourceType: "document",
-                resourceId: drhpId,
-                title: `Documents linked for comparison: ${drhpDoc.name} ↔ ${rhpDoc.name}`,
-                notifyWorkspace: true,
-            });
+            // Publish event for the linking (wrapped in try-catch to prevent errors from breaking the flow)
+            try {
+                await (0, events_1.publishEvent)({
+                    actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                    domain: req.userDomain,
+                    action: "documents.linked",
+                    resourceType: "document",
+                    resourceId: drhpId,
+                    title: `Documents linked for comparison: ${drhpDoc.name} ↔ ${rhpDoc.name}`,
+                    notifyWorkspace: true,
+                });
+            }
+            catch (eventError) {
+                // Log but don't fail the request - documents are already linked
+                console.error("Error publishing event for document linking:", eventError);
+            }
             res.json({
                 message: "Documents linked successfully for comparison",
                 drhpDocument: {
@@ -1076,16 +1125,22 @@ exports.documentController = {
                 document.relatedDrhpId = undefined;
                 await document.save();
             }
-            // Publish event for the unlinking
-            await (0, events_1.publishEvent)({
-                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
-                domain: req.userDomain,
-                action: "documents.unlinked",
-                resourceType: "document",
-                resourceId: document.id,
-                title: `Documents unlinked: ${document.name}`,
-                notifyWorkspace: true,
-            });
+            // Publish event for the unlinking (wrapped in try-catch to prevent errors from breaking the flow)
+            try {
+                await (0, events_1.publishEvent)({
+                    actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                    domain: req.userDomain,
+                    action: "documents.unlinked",
+                    resourceType: "document",
+                    resourceId: document.id,
+                    title: `Documents unlinked: ${document.name}`,
+                    notifyWorkspace: true,
+                });
+            }
+            catch (eventError) {
+                // Log but don't fail the request - documents are already unlinked
+                console.error("Error publishing event for document unlinking:", eventError);
+            }
             res.json({
                 message: "Documents unlinked successfully",
                 unlinkedDocument: {

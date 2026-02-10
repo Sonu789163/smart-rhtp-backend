@@ -11,6 +11,41 @@ import os from "os";
 import htmlDocx from "html-docx-js";
 import { io } from "../index";
 import { publishEvent } from "../lib/events";
+import { marked } from "marked";
+
+// Helper to clean and convert content to HTML
+const prepareContentForExport = (content: string): string => {
+  if (!content) return "";
+
+  // 1. Replace literal '\n' with actual newlines
+  let cleaned = content.replace(/\\n/g, "\n");
+
+  // 2. Convert Markdown to HTML (marked handles both MD and passes through HTML)
+  // We use a synchronous call for simplicity as marked is fast
+  const htmlContent = marked.parse(cleaned) as string;
+
+  // 3. Wrap in a basic HTML structure with some styling for DOCX/PDF consistency
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }
+        table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f2f2f2; font-weight: bold; }
+        h1, h2, h3 { color: #2c3e50; }
+        pre { background-color: #f8f8f8; padding: 10px; border-radius: 4px; overflow-x: auto; }
+        code { font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace; }
+      </style>
+    </head>
+    <body>
+      ${htmlContent}
+    </body>
+    </html>
+  `;
+};
 
 const execAsync = promisify(exec);
 
@@ -91,7 +126,7 @@ export const summaryController = {
 
       // Get domainId - priority: 1) from request body (n8n), 2) from user, 3) from domain name lookup
       let domainId: string | undefined = bodyDomainId;
-      
+
       if (!domainId) {
         // Try to get from user if available
         const user = req.user;
@@ -100,7 +135,7 @@ export const summaryController = {
           domainId = userWithDomain?.domainId || (userWithDomain as any)?.domainId;
         }
       }
-      
+
       // If domainId still not found, try to get it from the domain name
       if (!domainId && actualDomain) {
         try {
@@ -113,9 +148,9 @@ export const summaryController = {
           console.error("Error fetching domainId from Domain model:", error);
         }
       }
-      
+
       if (!domainId) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: "domainId is required. Unable to determine domainId from request body, user, or domain.",
           message: "Please ensure domainId is included in the request body or contact administrator."
         });
@@ -176,11 +211,14 @@ export const summaryController = {
         return res.status(404).json({ error: "Summary not found" });
       }
 
+      // Prepare content (handles \n and MD-to-HTML conversion)
+      const formattedHtml = prepareContentForExport(summary.content);
+
       // Write HTML to a temp file
       const tmpDir = os.tmpdir();
       const htmlPath = path.join(tmpDir, `summary_${id}.html`);
       const docxPath = path.join(tmpDir, `summary_${id}.docx`);
-      await writeFile(htmlPath, summary.content, "utf8");
+      await writeFile(htmlPath, formattedHtml, "utf8");
 
       // Convert HTML to DOCX using Pandoc
       await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
@@ -301,7 +339,7 @@ export const summaryController = {
         const pdfcoResponse = await axios.post(
           "https://api.pdf.co/v1/pdf/convert/from/html",
           {
-            html: summary.content,
+            html: prepareContentForExport(summary.content),
             name: `${summary.title || "summary"}.pdf`,
             allowAbsoluteUrls: true,
           },
@@ -318,8 +356,8 @@ export const summaryController = {
           if (pdfcoResponse.data?.error || pdfcoResponse.data?.status === 402) {
             const errorMsg = pdfcoResponse.data?.message || "PDF.co API error: Insufficient credits or service unavailable";
             console.error("PDF.co API error:", pdfcoResponse.data);
-            return res.status(503).json({ 
-              error: "PDF generation service temporarily unavailable", 
+            return res.status(503).json({
+              error: "PDF generation service temporarily unavailable",
               message: errorMsg,
               details: "The PDF generation service is currently unavailable. Please try again later or contact support."
             });
@@ -343,8 +381,8 @@ export const summaryController = {
         if (pdfcoError.response?.status === 402) {
           const errorData = pdfcoError.response?.data || {};
           console.error("PDF.co API error (402):", errorData);
-          return res.status(503).json({ 
-            error: "PDF generation service unavailable", 
+          return res.status(503).json({
+            error: "PDF generation service unavailable",
             message: errorData.message || "Insufficient credits for PDF generation",
             details: "The PDF generation service requires additional credits. Please contact support or try again later."
           });
@@ -352,8 +390,8 @@ export const summaryController = {
         if (pdfcoError.response?.status) {
           const errorData = pdfcoError.response?.data || {};
           console.error(`PDF.co API error (${pdfcoError.response.status}):`, errorData);
-          return res.status(503).json({ 
-            error: "PDF generation service error", 
+          return res.status(503).json({
+            error: "PDF generation service error",
             message: errorData.message || "PDF generation failed",
             details: "The PDF generation service encountered an error. Please try again later."
           });
@@ -362,15 +400,15 @@ export const summaryController = {
       }
     } catch (error: any) {
       console.error("Error generating PDF with PDF.co:", error);
-      
+
       // Check if response was already sent
       if (res.headersSent) {
         return;
       }
-      
+
       // Return proper error response
-      res.status(500).json({ 
-        error: "Failed to generate PDF", 
+      res.status(500).json({
+        error: "Failed to generate PDF",
         message: error.message || "An unexpected error occurred",
         details: "Please try again later or contact support if the problem persists."
       });

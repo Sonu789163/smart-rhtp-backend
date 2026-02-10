@@ -47,6 +47,38 @@ const path_1 = __importDefault(require("path"));
 const os_1 = __importDefault(require("os"));
 const index_1 = require("../index");
 const events_1 = require("../lib/events");
+const marked_1 = require("marked");
+// Helper to clean and convert content to HTML
+const prepareContentForExport = (content) => {
+    if (!content)
+        return "";
+    // 1. Replace literal '\n' with actual newlines
+    let cleaned = content.replace(/\\n/g, "\n");
+    // 2. Convert Markdown to HTML (marked handles both MD and passes through HTML)
+    // We use a synchronous call for simplicity as marked is fast
+    const htmlContent = marked_1.marked.parse(cleaned);
+    // 3. Wrap in a basic HTML structure with some styling for DOCX/PDF consistency
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }
+        table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f2f2f2; font-weight: bold; }
+        h1, h2, h3 { color: #2c3e50; }
+        pre { background-color: #f8f8f8; padding: 10px; border-radius: 4px; overflow-x: auto; }
+        code { font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace; }
+      </style>
+    </head>
+    <body>
+      ${htmlContent}
+    </body>
+    </html>
+  `;
+};
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.summaryController = {
     async getAll(req, res) {
@@ -190,11 +222,13 @@ exports.summaryController = {
             if (!summary || !summary.content) {
                 return res.status(404).json({ error: "Summary not found" });
             }
+            // Prepare content (handles \n and MD-to-HTML conversion)
+            const formattedHtml = prepareContentForExport(summary.content);
             // Write HTML to a temp file
             const tmpDir = os_1.default.tmpdir();
             const htmlPath = path_1.default.join(tmpDir, `summary_${id}.html`);
             const docxPath = path_1.default.join(tmpDir, `summary_${id}.docx`);
-            await (0, promises_1.writeFile)(htmlPath, summary.content, "utf8");
+            await (0, promises_1.writeFile)(htmlPath, formattedHtml, "utf8");
             // Convert HTML to DOCX using Pandoc
             await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
             // Send DOCX file
@@ -300,7 +334,7 @@ exports.summaryController = {
             // Call PDF.co API to generate PDF from HTML
             try {
                 const pdfcoResponse = await axios_1.default.post("https://api.pdf.co/v1/pdf/convert/from/html", {
-                    html: summary.content,
+                    html: prepareContentForExport(summary.content),
                     name: `${summary.title || "summary"}.pdf`,
                     allowAbsoluteUrls: true,
                 }, {

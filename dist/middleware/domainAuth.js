@@ -229,7 +229,13 @@ const domainAuthMiddleware = async (req, res, next) => {
             await user.save();
         }
         // Set workspace context for controllers
-        req.userDomain = user.domain; // Always use actual domain
+        // For cross-domain users with membership, keep req.userDomain as workspace domain (set above)
+        // For same-domain users, use user's domain
+        // This allows cross-domain users to access workspace domain data
+        if (!(membership && workspace.domain !== user.domain)) {
+            // Only override if we didn't set it to workspace domain above
+            req.userDomain = user.domain;
+        }
         req.currentWorkspace = effectiveWorkspaceId; // Use actual workspaceId
         next();
     }

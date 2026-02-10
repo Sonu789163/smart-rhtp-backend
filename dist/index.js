@@ -35,27 +35,71 @@ app.set('trust proxy', 1);
 const server = http_1.default.createServer(app);
 const io = new socket_io_1.Server(server, {
     cors: {
-        origin: [
-            "https://rhp-document-summarizer.vercel.app",
-            "http://localhost:8080",
-        ],
+        origin: function (origin, callback) {
+            // Allow requests with no origin
+            if (!origin)
+                return callback(null, true);
+            const allowedOrigins = [
+                "https://rhp-document-summarizer.vercel.app",
+                "http://localhost:8080",
+                "http://localhost:3000",
+            ];
+            if (allowedOrigins.indexOf(origin) !== -1) {
+                callback(null, true);
+            }
+            else if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+                callback(null, true);
+            }
+            else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
         credentials: true,
+        methods: ['GET', 'POST'],
     },
 });
 exports.io = io;
 const PORT = process.env.PORT || 5000;
-// Middleware
+// CORS configuration - must be before other middleware
+const allowedOrigins = [
+    "https://rhp-document-summarizer.vercel.app",
+    "http://localhost:8080",
+    "http://localhost:3000",
+];
 app.use((0, cors_1.default)({
-    origin: [
-        "https://rhp-document-summarizer.vercel.app",
-        "http://localhost:8080",
-    ],
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin)
+            return callback(null, true);
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        }
+        else {
+            // For development, allow any localhost origin
+            if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+                callback(null, true);
+            }
+            else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        }
+    },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-workspace'],
+    exposedHeaders: ['Content-Type', 'Authorization'],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
 }));
+// Handle preflight requests explicitly
+app.options('*', (0, cors_1.default)());
 app.use(express_1.default.json());
 app.use(passport_1.default.initialize());
-// Security middleware
-app.use((0, helmet_1.default)());
+// Security middleware - configure helmet to work with CORS
+app.use((0, helmet_1.default)({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginEmbedderPolicy: false,
+}));
 // Rate limiting middleware
 const limiter = (0, express_rate_limit_1.default)({
     windowMs: 1 * 60 * 1000, // 15 minutes
