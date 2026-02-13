@@ -1,0 +1,24 @@
+Starting downloadDocx for ID: 1770892511093
+Summary not found or empty content for ID: 1770892511093
+Starting downloadDocx for ID: 1770892511093
+Summary not found or empty content for ID: 1770892511093
+Starting downloadDocx for ID: 1770892511093
+Found summary: 1770892511093 (Type: number)
+Paths: Input=/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.html, Output=/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.docx, Cmd=pandoc "/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.html" -f html -t docx -o "/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.docx"
+Pandoc Success. Stdout: , Stderr: 
+File sent successfully.
+Starting downloadDocx for ID: 1770892511093
+Found summary: 1770892511093 (Type: number)
+Paths: Input=/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.html, Output=/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.docx, Cmd=pandoc "/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.html" -f html -t docx -o "/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.docx"
+Pandoc Success. Stdout: , Stderr: 
+File sent successfully.
+Starting downloadDocx for ID: 1770892511093
+Found summary: 1770892511093 (Type: number)
+Paths: Input=/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.html, Output=/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.docx, Cmd=pandoc "/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.html" -f html -t docx -o "/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.docx"
+Pandoc Success. Stdout: , Stderr: 
+File sent successfully.
+Starting downloadDocx for ID: 1770892511093
+Found summary: 1770892511093 (Type: number)
+Paths: Input=/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.md, Output=/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.docx, Cmd=pandoc "/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.md" -f markdown -t docx -o "/var/folders/k1/dq2_jmv914sc8n0bdqyt2sf00000gn/T/summary_1770892511093.docx"
+Pandoc Success. Stdout: , Stderr: 
+File sent successfully.
