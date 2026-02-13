@@ -1,19 +1,27 @@
+
 import mongoose from "mongoose";
 import { Summary } from "./models/Summary";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-async function check() {
-    await mongoose.connect(process.env.MONGODB_URI || "mongodb://localhost:27017/ai_platform");
-    const count = await Summary.countDocuments();
-    console.log("Total summaries:", count);
-    const latest = await Summary.findOne().sort({ updatedAt: -1 });
-    console.log("Latest summary:", JSON.stringify(latest, null, 2));
-    process.exit(0);
+async function checkSummaries() {
+    try {
+        await mongoose.connect(process.env.MONGODB_URI as string);
+        console.log("Connected to MongoDB");
+
+        // Get latest 5 summaries
+        const summaries = await Summary.find({}).sort({ _id: -1 }).limit(5).lean();
+        console.log(`Found ${summaries.length} recent summaries`);
+
+        summaries.forEach(s => {
+            console.log(`_id: ${s._id}, id: ${s.id} (Type: ${typeof s.id}), title: ${s.title}`);
+        });
+
+        await mongoose.disconnect();
+    } catch (error) {
+        console.error("Error:", error);
+    }
 }
 
-check().catch(err => {
-    console.error(err);
-    process.exit(1);
-});
+checkSummaries();

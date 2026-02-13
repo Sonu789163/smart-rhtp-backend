@@ -387,19 +387,69 @@ export const summaryController = {
   async downloadDocx(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const summary = await Summary.findOne({ id });
+
+      // LOG START
+      try { await writeFile(path.join(process.cwd(), "debug_error.log"), `Starting downloadDocx for ID: ${id}\n`, { flag: "a" }); } catch { }
+
+      const summary = await Summary.findOne({
+        $or: [
+          { id: id },
+          { id: Number(id) }
+        ]
+      });
+
       if (!summary || !summary.content) {
+        try { await writeFile(path.join(process.cwd(), "debug_error.log"), `Summary not found or empty content for ID: ${id} (Tried Number: ${Number(id)})\n`, { flag: "a" }); } catch { }
         return res.status(404).json({ error: "Summary not found" });
       }
 
-      // Write HTML to a temp file
-      const tmpDir = os.tmpdir();
-      const htmlPath = path.join(tmpDir, `summary_${id}.html`);
-      const docxPath = path.join(tmpDir, `summary_${id}.docx`);
-      await writeFile(htmlPath, summary.content, "utf8");
+      // Log success found
+      try { await writeFile(path.join(process.cwd(), "debug_error.log"), `Found summary: ${summary.id} (Type: ${typeof summary.id})\n`, { flag: "a" }); } catch { }
 
-      // Convert HTML to DOCX using Pandoc
-      await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
+
+      const tmpDir = os.tmpdir();
+      const docxPath = path.join(tmpDir, `summary_${id}.docx`);
+
+      // Clean content: Replace literal \n with real newlines, remove \r, \t, etc.
+      // This matches the frontend 'cleanSummaryContent' logic
+      const cleanContent = (summary.content || "")
+        .replace(/\\n/g, "\n")
+        .replace(/\\r/g, "")
+        .replace(/\\t/g, "\t")
+        .replace(/\\"/g, '"');
+
+      // Detect format (default to HTML for backward compatibility)
+      let format = (summary as any).format || "html";
+
+      // If format is "html" (legacy default) but content looks like markdown, switch to markdown
+      if (format === "html" && (cleanContent.includes("**") || cleanContent.includes("##") || cleanContent.includes("---"))) {
+        format = "markdown";
+      }
+
+
+      let inputPath: string;
+      let pandocCommand: string;
+
+      if (format === "markdown") {
+
+        inputPath = path.join(tmpDir, `summary_${id}.md`);
+        await writeFile(inputPath, cleanContent, "utf8");
+        pandocCommand = `pandoc "${inputPath}" -f markdown -t docx -o "${docxPath}"`;
+      } else {
+        inputPath = path.join(tmpDir, `summary_${id}.html`);
+        await writeFile(inputPath, cleanContent, "utf8");
+        pandocCommand = `pandoc "${inputPath}" -f html -t docx -o "${docxPath}"`;
+      }
+
+
+      // Log paths
+      try { await writeFile(path.join(process.cwd(), "debug_error.log"), `Paths: Input=${inputPath}, Output=${docxPath}, Cmd=${pandocCommand}\n`, { flag: "a" }); } catch { }
+
+      // Convert to DOCX using Pandoc
+      const { stdout, stderr } = await execAsync(pandocCommand);
+
+      // Log success
+      try { await writeFile(path.join(process.cwd(), "debug_error.log"), `Pandoc Success. Stdout: ${stdout}, Stderr: ${stderr}\n`, { flag: "a" }); } catch { }
 
       // Send DOCX file
       res.setHeader(
@@ -414,19 +464,30 @@ export const summaryController = {
         // Clean up temp files
         if (err) {
           console.error("Error sending file:", err);
+          try { await writeFile(path.join(process.cwd(), "debug_error.log"), `Error sending file: ${err.message}\n`, { flag: "a" }); } catch { }
+        } else {
+          try { await writeFile(path.join(process.cwd(), "debug_error.log"), `File sent successfully.\n`, { flag: "a" }); } catch { }
         }
         try {
-          await unlink(htmlPath);
+          await unlink(inputPath);
           await unlink(docxPath);
         } catch (cleanupError) {
           console.error("Error cleaning up temp files:", cleanupError);
         }
       });
-    } catch (error) {
+
+    } catch (error: any) {
       console.error("Error generating DOCX with Pandoc:", error);
-      res.status(500).json({ error: "Failed to generate DOCX" });
+      // Debug logging
+      try {
+        await writeFile(path.join(process.cwd(), "debug_error.log"), `Error: ${JSON.stringify(error, Object.getOwnPropertyNames(error))}\nStack: ${error.stack}\n`, { flag: "a" });
+      } catch (e) { console.error("Could not write debug log", e); }
+
+      res.status(500).json({ error: "Failed to generate DOCX", details: error.message });
     }
+
   },
+
 
   async update(req: AuthRequest, res: Response) {
     try {
