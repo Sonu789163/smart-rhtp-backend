@@ -67,7 +67,10 @@ function (err, req, res, next) {
             .json({ error: "File too large. Maximum size is 100MB." });
     }
     next(err);
-}, documentController_1.documentController.uploadRhp);
+}, (req, res, next) => {
+    req.body.type = "RHP";
+    next();
+}, documentController_1.documentController.uploadDocument);
 // Download/view PDF document
 router.get("/download/:id", documentController_1.documentController.downloadDocument);
 // Update document

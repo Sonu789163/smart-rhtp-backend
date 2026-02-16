@@ -53,6 +53,60 @@ const Chat_1 = require("../models/Chat");
 const dotenv_1 = __importDefault(require("dotenv"));
 const pdf_parse_1 = __importDefault(require("pdf-parse"));
 dotenv_1.default.config();
+// Helper function to send document to n8n
+const sendDocumentToN8n = async (document, buffer, n8nName, documentType) => {
+    var _a, _b, _c;
+    const n8nWebhookUrl = documentType === "RHP"
+        ? `${process.env.N8N_WEBHOOK_URL}/upload-rhp`
+        : `${process.env.N8N_WEBHOOK_URL}/upload-drhp`;
+    if (!process.env.N8N_WEBHOOK_URL) {
+        console.error("N8N_WEBHOOK_URL is not configured");
+        return;
+    }
+    const form = new form_data_1.default();
+    form.append("file", buffer, {
+        filename: document.name,
+        contentType: "application/pdf",
+    });
+    form.append("documentId", document.id);
+    form.append("namespace", document.namespace);
+    form.append("name", n8nName);
+    form.append("domain", document.domain);
+    form.append("domainId", document.domainId);
+    form.append("workspaceId", document.workspaceId);
+    form.append("type", documentType);
+    form.append("documentType", documentType);
+    try {
+        const n8nResponse = await axios_1.default.post(n8nWebhookUrl, form, {
+            headers: form.getHeaders(),
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+            timeout: 300000, // 5 minutes timeout
+        });
+        if (n8nResponse === null || n8nResponse === void 0 ? void 0 : n8nResponse.data) {
+            const n8nStatus = ((_a = n8nResponse.data) === null || _a === void 0 ? void 0 : _a.status) || ((_b = n8nResponse.data) === null || _b === void 0 ? void 0 : _b.documentStatus);
+            const normalizedStatus = (_c = n8nStatus === null || n8nStatus === void 0 ? void 0 : n8nStatus.toLowerCase()) === null || _c === void 0 ? void 0 : _c.trim();
+            if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
+                document.status = "completed";
+                await document.save();
+                console.log(`✅ Document ${document.id} status updated to "completed" from n8n response`);
+                index_1.io.emit("upload_status", { jobId: document.id, status: "completed" });
+                return "completed";
+            }
+            else if (normalizedStatus === "failed" || normalizedStatus === "error") {
+                document.status = "failed";
+                await document.save();
+                console.log(`❌ Document ${document.id} status updated to "failed" from n8n response`);
+                index_1.io.emit("upload_status", { jobId: document.id, status: "failed" });
+                return "failed";
+            }
+        }
+    }
+    catch (n8nErr) {
+        console.error("Failed to send file to n8n:", n8nErr);
+    }
+    return "processing";
+};
 exports.documentController = {
     // Helper to normalize namespace consistently (trim, preserve .pdf extension)
     // Keep case as-is; rely on Mongo collation for case-insensitive uniqueness
@@ -487,7 +541,7 @@ exports.documentController = {
         }
     },
     async uploadDocument(req, res) {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c;
         try {
             if (!req.file) {
                 return res.status(400).json({ error: "No file uploaded" });
@@ -508,13 +562,23 @@ exports.documentController = {
             }
             // Determine document type from request body, default to DRHP
             const documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
+            // RHP Specific Logic: Verify DRHP exists if linking
+            let relatedDrhp = null;
+            if (documentType === "RHP" && req.body.drhpId) {
+                relatedDrhp = await Document_1.Document.findById(req.body.drhpId);
+                if (!relatedDrhp) {
+                    return res.status(404).json({ error: "DRHP not found" });
+                }
+            }
             const docData = {
                 id: req.body.id || fileKey, // Use provided id from frontend or fallback to fileKey
                 name: originalname,
                 fileKey: fileKey,
                 namespace: originalname || req.body.namespace, // Use original name directly to preserve .pdf
+                rhpNamespace: documentType === "RHP" ? originalname : undefined, // Set rhpNamespace for RHP docs
                 type: documentType, // Set type based on request (DRHP or RHP)
                 status: "processing", // Set status to processing initially - n8n will update to completed
+                relatedDrhpId: relatedDrhp ? relatedDrhp.id : undefined,
                 domain: user.domain, // Add domain for workspace isolation - backward compatibility
                 domainId: userWithDomain.domainId, // Link to Domain schema
                 workspaceId, // Workspace required - middleware ensures it's set
@@ -539,6 +603,11 @@ exports.documentController = {
             }
             const document = new Document_1.Document(docData);
             await document.save();
+            // Link RHP to DRHP if applicable
+            if (relatedDrhp) {
+                relatedDrhp.relatedRhpId = document.id;
+                await relatedDrhp.save();
+            }
             // Publish event for upload
             await (0, events_1.publishEvent)({
                 actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
@@ -550,13 +619,7 @@ exports.documentController = {
                 notifyWorkspace: true,
             });
             // Notify n8n for further processing - choose webhook based on document type
-            const n8nWebhookUrl = documentType === "RHP"
-                ? `${process.env.N8N_WEBHOOK_URL}/upload-rhp`
-                : `${process.env.N8N_WEBHOOK_URL}/upload-drhp`;
-            if (!n8nWebhookUrl) {
-                console.error("N8N_WEBHOOK_URL is not configured");
-                return res.status(500).json({ error: "Server configuration error: N8N_WEBHOOK_URL missing" });
-            }
+            // n8n processing handled after validation
             // Download file from S3 and send to n8n
             const getObjectCommand = new client_s3_1.GetObjectCommand({
                 Bucket: r2_1.R2_BUCKET,
@@ -598,54 +661,15 @@ exports.documentController = {
                     // Delete from Mongo
                     await Document_1.Document.findByIdAndDelete(document._id);
                     return res.status(400).json({
-                        error: `Invalid document type. Please upload a valid ${documentType} document. The first page must contain "${documentType === 'DRHP' ? 'Draft Red Herring Prospectus' : 'Red Herring Prospectus'}".`
+                        error: `Invalid ${documentType} document`
                     });
                 }
                 console.log(`✅ Document ${document.id} validated as ${documentType}`);
                 // Prepare form data with buffer since we consumed the stream
-                const form = new form_data_1.default();
-                form.append("file", buffer, {
-                    filename: document.name,
-                    contentType: "application/pdf",
-                });
-                form.append("documentId", document.id);
-                form.append("namespace", document.name);
-                form.append("name", document.name);
-                form.append("domain", document.domain || user.domain);
-                form.append("domainId", document.domainId || userWithDomain.domainId);
-                form.append("workspaceId", document.workspaceId || workspaceId);
-                form.append("type", document.type); // Include document type in n8n request
-                form.append("documentType", document.type); // Add camelCase documentType as requested
-                // Send to n8n and check response for status
-                try {
-                    const n8nResponse = await axios_1.default.post(n8nWebhookUrl, form, {
-                        headers: form.getHeaders(),
-                        maxContentLength: Infinity,
-                        maxBodyLength: Infinity,
-                        timeout: 300000, // 5 minutes timeout
-                    });
-                    // Check if n8n returned a status in the response
-                    if (n8nResponse === null || n8nResponse === void 0 ? void 0 : n8nResponse.data) {
-                        const n8nStatus = ((_d = n8nResponse.data) === null || _d === void 0 ? void 0 : _d.status) || ((_e = n8nResponse.data) === null || _e === void 0 ? void 0 : _e.documentStatus);
-                        const normalizedStatus = (_f = n8nStatus === null || n8nStatus === void 0 ? void 0 : n8nStatus.toLowerCase()) === null || _f === void 0 ? void 0 : _f.trim();
-                        // If n8n returned a completed/ready status, update the document immediately
-                        if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
-                            document.status = "completed";
-                            await document.save();
-                            console.log(`✅ Document ${document.id} status updated to "completed" from n8n response`);
-                        }
-                        else if (normalizedStatus === "failed" || normalizedStatus === "error") {
-                            document.status = "failed";
-                            await document.save();
-                            console.log(`❌ Document ${document.id} status updated to "failed" from n8n response`);
-                        }
-                        // If status is "processing" or undefined, keep the default "processing" status
-                    }
-                }
-                catch (n8nErr) {
-                    console.error("Failed to send file to n8n:", n8nErr);
-                    // Even if n8n call fails, return the document (it's already saved with "processing" status)
-                }
+                // Send to n8n using helper
+                // Use DRHP name if RHP, otherwise document name
+                const n8nName = (documentType === "RHP" && relatedDrhp) ? relatedDrhp.name : document.name;
+                await sendDocumentToN8n(document, buffer, n8nName, documentType);
             }
             catch (validationErr) {
                 console.error("Error validating document:", validationErr);
@@ -880,155 +904,6 @@ exports.documentController = {
                 message: "Failed to process upload status update",
                 error: err instanceof Error ? err.message : String(err),
             });
-        }
-    },
-    async uploadRhp(req, res) {
-        var _a, _b, _c;
-        try {
-            const { drhpId } = req.body;
-            if (!req.file)
-                return res.status(400).json({ error: "No file uploaded" });
-            if (!drhpId)
-                return res.status(400).json({ error: "Missing DRHP ID" });
-            const drhp = await Document_1.Document.findById(drhpId);
-            if (!drhp)
-                return res.status(404).json({ error: "DRHP not found" });
-            const fileKey = req.file.key;
-            const user = req.user;
-            // Workspace is required for document upload
-            const workspaceId = req.currentWorkspace;
-            if (!workspaceId) {
-                return res.status(400).json({ error: "Workspace is required. Please select a workspace." });
-            }
-            // Create RHP namespace by appending "-rhp" to the DRHP namespace
-            const rhpNamespace = req.file.originalname;
-            // Get user's domainId
-            const userWithDomain = await User_1.User.findById(user._id).select("domainId");
-            if (!(userWithDomain === null || userWithDomain === void 0 ? void 0 : userWithDomain.domainId)) {
-                return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
-            }
-            const rhpDocData = {
-                id: fileKey,
-                fileKey: fileKey,
-                name: req.file.originalname, // Use original filename with .pdf extension
-                namespace: req.file.originalname, // Use original filename with .pdf extension
-                rhpNamespace: rhpNamespace,
-                type: "RHP",
-                status: "processing", // Set status to processing initially - n8n will update to completed
-                relatedDrhpId: drhp.id,
-                domain: user.domain, // Add domain for workspace isolation - backward compatibility
-                domainId: userWithDomain.domainId, // Link to Domain schema
-                workspaceId, // Workspace required - middleware ensures it's set
-            };
-            // Add user information if available
-            if (user === null || user === void 0 ? void 0 : user.microsoftId) {
-                rhpDocData.microsoftId = user.microsoftId;
-            }
-            else if (user === null || user === void 0 ? void 0 : user._id) {
-                rhpDocData.userId = user._id.toString();
-            }
-            const rhpDoc = new Document_1.Document(rhpDocData);
-            await rhpDoc.save();
-            drhp.relatedRhpId = rhpDoc.id;
-            await drhp.save();
-            // Send to n8n with RHP namespace
-            const n8nWebhookUrl = `${process.env.N8N_WEBHOOK_URL}/upload-rhp`;
-            if (!n8nWebhookUrl) {
-                console.error("N8N_WEBHOOK_URL is not configured");
-                return res.status(500).json({ error: "Server configuration error: N8N_WEBHOOK_URL missing" });
-            }
-            // Download file from S3 and send to n8n
-            // Download file from S3 and send to n8n
-            const getObjectCommand = new client_s3_1.GetObjectCommand({
-                Bucket: r2_1.R2_BUCKET,
-                Key: fileKey,
-            });
-            const s3Response = await r2_1.r2Client.send(getObjectCommand);
-            // Read stream into buffer for validation and n8n upload
-            const chunks = [];
-            // @ts-ignore
-            for await (const chunk of s3Response.Body) {
-                chunks.push(chunk);
-            }
-            const buffer = Buffer.concat(chunks);
-            // Validate PDF content
-            // @ts-ignore
-            const data = await (0, pdf_parse_1.default)(buffer, { max: 1 });
-            const text = data.text;
-            const normalizedText = text.toLowerCase();
-            // Check for "Red Herring Prospectus" AND ensure it's NOT a draft
-            const isValid = normalizedText.includes("red herring prospectus") &&
-                !normalizedText.includes("draft red herring prospectus");
-            if (!isValid) {
-                console.warn(`❌ Invalid RHP document content for ${rhpDoc.id}. Deleting...`);
-                // Delete from R2
-                const deleteCommand = new client_s3_1.DeleteObjectCommand({
-                    Bucket: r2_1.R2_BUCKET,
-                    Key: fileKey,
-                });
-                await r2_1.r2Client.send(deleteCommand);
-                // Delete from Mongo
-                await Document_1.Document.findByIdAndDelete(rhpDoc._id);
-                return res.status(400).json({
-                    error: `Invalid document content. The first page must contain "Red Herring Prospectus" and not "Draft".`
-                });
-            }
-            const form = new form_data_1.default();
-            form.append("file", buffer, {
-                filename: rhpDoc.name,
-                contentType: "application/pdf",
-            });
-            form.append("documentId", rhpDoc.id);
-            form.append("namespace", rhpNamespace); // Use RHP namespace for n8n
-            form.append("name", drhp.name);
-            form.append("domain", rhpDoc.domain || user.domain);
-            form.append("domainId", rhpDoc.domainId || userWithDomain.domainId);
-            form.append("workspaceId", rhpDoc.workspaceId || workspaceId);
-            form.append("type", "RHP");
-            form.append("documentType", "RHP");
-            // Send to n8n and check response for status
-            let finalStatus = "processing"; // Default status
-            try {
-                const n8nResponse = await axios_1.default.post(n8nWebhookUrl, form, {
-                    headers: form.getHeaders(),
-                    maxContentLength: Infinity,
-                    maxBodyLength: Infinity,
-                    timeout: 300000, // 5 minutes timeout
-                });
-                // Check if n8n returned a status in the response
-                if (n8nResponse === null || n8nResponse === void 0 ? void 0 : n8nResponse.data) {
-                    const n8nStatus = ((_a = n8nResponse.data) === null || _a === void 0 ? void 0 : _a.status) || ((_b = n8nResponse.data) === null || _b === void 0 ? void 0 : _b.documentStatus);
-                    const normalizedStatus = (_c = n8nStatus === null || n8nStatus === void 0 ? void 0 : n8nStatus.toLowerCase()) === null || _c === void 0 ? void 0 : _c.trim();
-                    // If n8n returned a completed/ready status, update the document immediately
-                    if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
-                        rhpDoc.status = "completed";
-                        await rhpDoc.save();
-                        finalStatus = "completed";
-                        console.log(`✅ RHP Document ${rhpDoc.id} status updated to "completed" from n8n response`);
-                    }
-                    else if (normalizedStatus === "failed" || normalizedStatus === "error") {
-                        rhpDoc.status = "failed";
-                        await rhpDoc.save();
-                        finalStatus = "failed";
-                        console.log(`❌ RHP Document ${rhpDoc.id} status updated to "failed" from n8n response`);
-                    }
-                    // If status is "processing" or undefined, keep the default "processing" status
-                }
-            }
-            catch (n8nErr) {
-                console.error("Failed to send file to n8n:", n8nErr);
-                // Even if n8n call fails, return the document (it's already saved with "processing" status)
-            }
-            // Emit upload status (use the actual status from n8n or default to processing)
-            const jobId = rhpDoc.id;
-            index_1.io.emit("upload_status", { jobId, status: finalStatus });
-            res
-                .status(201)
-                .json({ message: "RHP uploaded and linked", document: rhpDoc });
-        }
-        catch (error) {
-            console.error("Error uploading RHP:", error);
-            res.status(500).json({ error: "Failed to upload RHP" });
         }
     },
     // Admin: Get all documents across all workspaces in domain
