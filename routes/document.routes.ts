@@ -87,7 +87,11 @@ router.post(
     }
     next(err);
   },
-  documentController.uploadRhp
+  (req: Request, res: Response, next: NextFunction) => {
+    req.body.type = "RHP";
+    next();
+  },
+  documentController.uploadDocument
 );
 
 // Download/view PDF document

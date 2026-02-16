@@ -50,6 +50,8 @@
     "pandoc": "^0.2.0",
     "passport": "^0.7.0",
     "passport-azure-ad": "^4.3.5",
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^1.1.1",
     "phantomjs-prebuilt": "^2.1.16",
     "puppeteer": "^24.25.0",
     "socket.io": "^4.8.1",
@@ -60,6 +62,7 @@
   "devDependencies": {
     "@types/form-data": "^2.2.1",
     "@types/multer": "^1.4.13",
-    "@types/multer-s3": "^3.0.3"
+    "@types/multer-s3": "^3.0.3",
+    "@types/pdf-parse": "^1.1.5"
   }
 }

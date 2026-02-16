@@ -50,6 +50,9 @@ const client_s3_1 = require("@aws-sdk/client-s3");
 const Summary_1 = require("../models/Summary");
 const Report_1 = require("../models/Report");
 const Chat_1 = require("../models/Chat");
+const dotenv_1 = __importDefault(require("dotenv"));
+const pdf_parse_1 = __importDefault(require("pdf-parse"));
+dotenv_1.default.config();
 exports.documentController = {
     // Helper to normalize namespace consistently (trim, preserve .pdf extension)
     // Keep case as-is; rely on Mongo collation for case-insensitive uniqueness
@@ -548,55 +551,119 @@ exports.documentController = {
             });
             // Notify n8n for further processing - choose webhook based on document type
             const n8nWebhookUrl = documentType === "RHP"
-                ? "https://n8n-excollo.azurewebsites.net/webhook/upload-rhp"
-                : "https://n8n-excollo.azurewebsites.net/webhook/bfda1ff3-99be-4f6e-995f-7728ca5b2f6a";
+                ? `${process.env.N8N_WEBHOOK_URL}/upload-rhp`
+                : `${process.env.N8N_WEBHOOK_URL}/upload-drhp`;
+            if (!n8nWebhookUrl) {
+                console.error("N8N_WEBHOOK_URL is not configured");
+                return res.status(500).json({ error: "Server configuration error: N8N_WEBHOOK_URL missing" });
+            }
             // Download file from S3 and send to n8n
             const getObjectCommand = new client_s3_1.GetObjectCommand({
                 Bucket: r2_1.R2_BUCKET,
                 Key: fileKey,
             });
             const s3Response = await r2_1.r2Client.send(getObjectCommand);
-            const form = new form_data_1.default();
-            form.append("file", s3Response.Body, {
-                filename: document.name,
-                contentType: "application/pdf",
-            });
-            form.append("documentId", document.id);
-            form.append("namespace", document.name);
-            form.append("name", document.name);
-            form.append("domain", document.domain || user.domain);
-            form.append("domainId", document.domainId || userWithDomain.domainId);
-            form.append("workspaceId", document.workspaceId || workspaceId);
-            form.append("type", document.type); // Include document type in n8n request
-            // Send to n8n and check response for status
+            // Validate document content before sending to n8n
             try {
-                const n8nResponse = await axios_1.default.post(n8nWebhookUrl, form, {
-                    headers: form.getHeaders(),
-                    maxContentLength: Infinity,
-                    maxBodyLength: Infinity,
-                    timeout: 300000, // 5 minutes timeout
+                // Clone the stream for validation (we need one stream for validation, one for n8n)
+                // Since we can't easily clone a stream, we'll read into a buffer
+                const chunks = [];
+                // @ts-ignore
+                for await (const chunk of s3Response.Body) {
+                    chunks.push(chunk);
+                }
+                const buffer = Buffer.concat(chunks);
+                // Parse PDF to get text
+                const data = await (0, pdf_parse_1.default)(buffer, { max: 1 }); // Only parse first page
+                const text = data.text;
+                let isValid = false;
+                const normalizedText = text.toLowerCase();
+                if (documentType === "DRHP") {
+                    // Check for "Draft Red Herring Prospectus"
+                    isValid = normalizedText.includes("draft red herring prospectus");
+                }
+                else if (documentType === "RHP") {
+                    // Check for "Red Herring Prospectus" AND ensure it's NOT a draft
+                    isValid = normalizedText.includes("red herring prospectus") &&
+                        !normalizedText.includes("draft red herring prospectus");
+                }
+                if (!isValid) {
+                    console.warn(`❌ Invalid document type for ${document.id}. Expected ${documentType}. Deleting...`);
+                    // Delete from R2
+                    const deleteCommand = new client_s3_1.DeleteObjectCommand({
+                        Bucket: r2_1.R2_BUCKET,
+                        Key: fileKey,
+                    });
+                    await r2_1.r2Client.send(deleteCommand);
+                    // Delete from Mongo
+                    await Document_1.Document.findByIdAndDelete(document._id);
+                    return res.status(400).json({
+                        error: `Invalid document type. Please upload a valid ${documentType} document. The first page must contain "${documentType === 'DRHP' ? 'Draft Red Herring Prospectus' : 'Red Herring Prospectus'}".`
+                    });
+                }
+                console.log(`✅ Document ${document.id} validated as ${documentType}`);
+                // Prepare form data with buffer since we consumed the stream
+                const form = new form_data_1.default();
+                form.append("file", buffer, {
+                    filename: document.name,
+                    contentType: "application/pdf",
                 });
-                // Check if n8n returned a status in the response
-                if (n8nResponse === null || n8nResponse === void 0 ? void 0 : n8nResponse.data) {
-                    const n8nStatus = ((_d = n8nResponse.data) === null || _d === void 0 ? void 0 : _d.status) || ((_e = n8nResponse.data) === null || _e === void 0 ? void 0 : _e.documentStatus);
-                    const normalizedStatus = (_f = n8nStatus === null || n8nStatus === void 0 ? void 0 : n8nStatus.toLowerCase()) === null || _f === void 0 ? void 0 : _f.trim();
-                    // If n8n returned a completed/ready status, update the document immediately
-                    if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
-                        document.status = "completed";
-                        await document.save();
-                        console.log(`✅ Document ${document.id} status updated to "completed" from n8n response`);
+                form.append("documentId", document.id);
+                form.append("namespace", document.name);
+                form.append("name", document.name);
+                form.append("domain", document.domain || user.domain);
+                form.append("domainId", document.domainId || userWithDomain.domainId);
+                form.append("workspaceId", document.workspaceId || workspaceId);
+                form.append("type", document.type); // Include document type in n8n request
+                form.append("documentType", document.type); // Add camelCase documentType as requested
+                // Send to n8n and check response for status
+                try {
+                    const n8nResponse = await axios_1.default.post(n8nWebhookUrl, form, {
+                        headers: form.getHeaders(),
+                        maxContentLength: Infinity,
+                        maxBodyLength: Infinity,
+                        timeout: 300000, // 5 minutes timeout
+                    });
+                    // Check if n8n returned a status in the response
+                    if (n8nResponse === null || n8nResponse === void 0 ? void 0 : n8nResponse.data) {
+                        const n8nStatus = ((_d = n8nResponse.data) === null || _d === void 0 ? void 0 : _d.status) || ((_e = n8nResponse.data) === null || _e === void 0 ? void 0 : _e.documentStatus);
+                        const normalizedStatus = (_f = n8nStatus === null || n8nStatus === void 0 ? void 0 : n8nStatus.toLowerCase()) === null || _f === void 0 ? void 0 : _f.trim();
+                        // If n8n returned a completed/ready status, update the document immediately
+                        if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
+                            document.status = "completed";
+                            await document.save();
+                            console.log(`✅ Document ${document.id} status updated to "completed" from n8n response`);
+                        }
+                        else if (normalizedStatus === "failed" || normalizedStatus === "error") {
+                            document.status = "failed";
+                            await document.save();
+                            console.log(`❌ Document ${document.id} status updated to "failed" from n8n response`);
+                        }
+                        // If status is "processing" or undefined, keep the default "processing" status
                     }
-                    else if (normalizedStatus === "failed" || normalizedStatus === "error") {
-                        document.status = "failed";
-                        await document.save();
-                        console.log(`❌ Document ${document.id} status updated to "failed" from n8n response`);
-                    }
-                    // If status is "processing" or undefined, keep the default "processing" status
+                }
+                catch (n8nErr) {
+                    console.error("Failed to send file to n8n:", n8nErr);
+                    // Even if n8n call fails, return the document (it's already saved with "processing" status)
                 }
             }
-            catch (n8nErr) {
-                console.error("Failed to send file to n8n:", n8nErr);
-                // Even if n8n call fails, return the document (it's already saved with "processing" status)
+            catch (validationErr) {
+                console.error("Error validating document:", validationErr);
+                // Cleanup on validation error
+                try {
+                    const deleteCommand = new client_s3_1.DeleteObjectCommand({
+                        Bucket: r2_1.R2_BUCKET,
+                        Key: fileKey,
+                    });
+                    await r2_1.r2Client.send(deleteCommand);
+                    await Document_1.Document.findByIdAndDelete(document._id);
+                }
+                catch (cleanupErr) {
+                    console.error("Cleanup failed:", cleanupErr);
+                }
+                return res.status(400).json({
+                    error: `Failed to validate document content: ${validationErr.message}.`
+                });
             }
             res.status(201).json({ message: "File uploaded successfully", document });
         }
@@ -865,15 +932,49 @@ exports.documentController = {
             drhp.relatedRhpId = rhpDoc.id;
             await drhp.save();
             // Send to n8n with RHP namespace
-            const n8nWebhookUrl = "https://n8n-excollo.azurewebsites.net/webhook/upload-rhp";
+            const n8nWebhookUrl = `${process.env.N8N_WEBHOOK_URL}/upload-rhp`;
+            if (!n8nWebhookUrl) {
+                console.error("N8N_WEBHOOK_URL is not configured");
+                return res.status(500).json({ error: "Server configuration error: N8N_WEBHOOK_URL missing" });
+            }
+            // Download file from S3 and send to n8n
             // Download file from S3 and send to n8n
             const getObjectCommand = new client_s3_1.GetObjectCommand({
                 Bucket: r2_1.R2_BUCKET,
                 Key: fileKey,
             });
             const s3Response = await r2_1.r2Client.send(getObjectCommand);
+            // Read stream into buffer for validation and n8n upload
+            const chunks = [];
+            // @ts-ignore
+            for await (const chunk of s3Response.Body) {
+                chunks.push(chunk);
+            }
+            const buffer = Buffer.concat(chunks);
+            // Validate PDF content
+            // @ts-ignore
+            const data = await (0, pdf_parse_1.default)(buffer, { max: 1 });
+            const text = data.text;
+            const normalizedText = text.toLowerCase();
+            // Check for "Red Herring Prospectus" AND ensure it's NOT a draft
+            const isValid = normalizedText.includes("red herring prospectus") &&
+                !normalizedText.includes("draft red herring prospectus");
+            if (!isValid) {
+                console.warn(`❌ Invalid RHP document content for ${rhpDoc.id}. Deleting...`);
+                // Delete from R2
+                const deleteCommand = new client_s3_1.DeleteObjectCommand({
+                    Bucket: r2_1.R2_BUCKET,
+                    Key: fileKey,
+                });
+                await r2_1.r2Client.send(deleteCommand);
+                // Delete from Mongo
+                await Document_1.Document.findByIdAndDelete(rhpDoc._id);
+                return res.status(400).json({
+                    error: `Invalid document content. The first page must contain "Red Herring Prospectus" and not "Draft".`
+                });
+            }
             const form = new form_data_1.default();
-            form.append("file", s3Response.Body, {
+            form.append("file", buffer, {
                 filename: rhpDoc.name,
                 contentType: "application/pdf",
             });
@@ -883,6 +984,8 @@ exports.documentController = {
             form.append("domain", rhpDoc.domain || user.domain);
             form.append("domainId", rhpDoc.domainId || userWithDomain.domainId);
             form.append("workspaceId", rhpDoc.workspaceId || workspaceId);
+            form.append("type", "RHP");
+            form.append("documentType", "RHP");
             // Send to n8n and check response for status
             let finalStatus = "processing"; // Default status
             try {
