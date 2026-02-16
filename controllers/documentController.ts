@@ -756,8 +756,6 @@ export const documentController = {
     }
   },
 
-  // restore disabled while trash functionality is off
-
   async delete(req: AuthRequest, res: Response) {
     try {
       // Workspace is required
@@ -791,13 +789,13 @@ export const documentController = {
 
       // Build list of document ids to cascade delete against (only the document being deleted)
       const docIdsToDelete: string[] = [document.id];
-      let linkedRhpId: string | null = null;
-      let linkedRhpDoc: any = null;
+      // let linkedRhpId: string | null = null;
+      // let linkedRhpDoc: any = null;
 
       // If deleting a DRHP, unlink from RHP (don't delete RHP)
       if (document.type === "DRHP" && document.relatedRhpId) {
-        linkedRhpId = document.relatedRhpId;
-        linkedRhpDoc = await Document.findOne({ id: linkedRhpId, domain: req.userDomain, workspaceId: currentWorkspace });
+        const linkedRhpId = document.relatedRhpId;
+        const linkedRhpDoc = await Document.findOne({ id: linkedRhpId, domain: req.userDomain, workspaceId: currentWorkspace });
         if (linkedRhpDoc) {
           // Unlink RHP from DRHP
           linkedRhpDoc.relatedDrhpId = undefined as any;
@@ -805,7 +803,6 @@ export const documentController = {
           // Don't delete RHP - just unlink
         }
       }
-
       // If deleting an RHP, unlink from DRHP (don't delete DRHP)
       if (document.type === "RHP") {
         const drhpDoc = await Document.findOne({ relatedRhpId: document.id, domain: req.userDomain, workspaceId: currentWorkspace });
@@ -918,7 +915,7 @@ export const documentController = {
         action: "document.deleted",
         resourceType: "document",
         resourceId: document.id,
-        title: `Document deleted: ${document.name}`,
+        title: `Document deleted: ${document.name} `,
         notifyWorkspace: true,
       });
 
@@ -951,7 +948,7 @@ export const documentController = {
       }
 
       // Determine document type from request body, default to DRHP
-      const documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
+      let documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
 
       // NEW: Directory is now required for document upload (directory-first approach)
       const directoryId = req.body.directoryId === "root" ? null : req.body.directoryId;
@@ -1019,6 +1016,92 @@ export const documentController = {
       } else if (user?._id) {
         docData.userId = user._id.toString();
       }
+
+      // --- VALIDATION START ---
+      // Download file to validate content (DRHP vs RHP)
+      let isContentValid = false;
+      let rejectionReason = "Document validation failed. Unable to verify document content.";
+
+      try {
+        const getObjectCommand = new GetObjectCommand({
+          Bucket: R2_BUCKET,
+          Key: fileKey,
+        });
+        const s3Response = await r2Client.send(getObjectCommand);
+
+        const chunks: Uint8Array[] = [];
+        // @ts-ignore
+        for await (const chunk of s3Response.Body) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+
+        // Parse PDF
+        // @ts-ignore
+        let pdfParse;
+        try {
+          pdfParse = require("pdf-parse");
+          if (typeof pdfParse !== 'function' && pdfParse.default) pdfParse = pdfParse.default;
+        } catch (e) {
+          console.error("Failed to require pdf-parse:", e);
+        }
+
+        if (typeof pdfParse === 'function') {
+          const data = await pdfParse(buffer, { max: 1 });
+          const normalizedText = (data.text || "").toLowerCase();
+
+          let detectedType: string | null = null;
+          if (normalizedText.includes("draft red herring prospectus")) {
+            detectedType = "DRHP";
+          } else if (normalizedText.includes("red herring prospectus")) {
+            // If strictly red herring and NOT draft
+            if (!normalizedText.includes("draft red herring prospectus")) {
+              detectedType = "RHP";
+            }
+          }
+
+          if (!detectedType) {
+            // Invalid document
+            console.warn(`❌ Invalid document content. Rejecting.`);
+            const targetType = req.body.type || "DRHP";
+            rejectionReason = `Invalid ${targetType} document.`;
+            isContentValid = false;
+          } else {
+            // Strict validation: Content must match requested type
+            if (req.body.type && req.body.type !== detectedType) {
+              console.warn(`❌ Type mismatch. Requested: ${req.body.type}, Detected: ${detectedType}`);
+              rejectionReason = `Document type mismatch. You are trying to upload a ${detectedType} as ${req.body.type}. Please upload the correct document.`;
+              isContentValid = false;
+            } else {
+              // Apply detected type
+              documentType = detectedType;
+              docData.type = documentType;
+              isContentValid = true;
+              console.log(`✅ Document identified as ${documentType}`);
+            }
+          }
+        } else {
+          rejectionReason = "Server configuration error: PDF parser not available.";
+        }
+      } catch (valError: any) {
+        console.error("Validation error:", valError);
+        rejectionReason = "Validation error: " + (valError.message || "Unknown error");
+      }
+
+      if (!isContentValid) {
+        // Delete from R2
+        try {
+          const deleteCommand = new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: fileKey,
+          });
+          await r2Client.send(deleteCommand);
+        } catch (e) { }
+
+        return res.status(400).json({ error: rejectionReason });
+      }
+      // --- VALIDATION END ---
+
       const document = new Document(docData);
       await document.save();
 
@@ -1047,7 +1130,7 @@ export const documentController = {
         action: "document.uploaded",
         resourceType: "document",
         resourceId: document.id,
-        title: `Document uploaded: ${document.name}`,
+        title: `Document uploaded: ${document.name} `,
         notifyWorkspace: true,
       });
 
@@ -1057,9 +1140,9 @@ export const documentController = {
       try {
         const fileUrl = await this.getPresignedUrl(fileKey);
 
-        console.log(`Sending document to Python API: ${pythonApiUrl}/jobs/document`);
+        console.log(`Sending document to Python API: ${pythonApiUrl} /jobs/document`);
 
-        const pythonResponse = await axios.post(`${pythonApiUrl}/jobs/document`, {
+        const pythonResponse = await axios.post(`${pythonApiUrl} /jobs/document`, {
           file_url: fileUrl,
           file_type: "pdf",
           metadata: {
@@ -1169,7 +1252,7 @@ export const documentController = {
       res.set({
         "Content-Type": "application/pdf",
         "Content-Disposition": `${inline ? "inline" : "attachment"
-          }; filename=\"${document.name}\"`,
+          }; filename =\"${document.name}\"`,
         "Cache-Control": "private, max-age=60",
       });
       const getObjectCommand = new GetObjectCommand({
@@ -1434,6 +1517,69 @@ export const documentController = {
       } else if (user?._id) {
         rhpDocData.userId = user._id.toString();
       }
+
+      // --- VALIDATION START FOR RHP ---
+      let isContentValid = false;
+      let rejectionReason = "Document validation failed. Unable to verify document content.";
+
+      try {
+        const getObjectCommand = new GetObjectCommand({
+          Bucket: R2_BUCKET,
+          Key: fileKey,
+        });
+        const s3Response = await r2Client.send(getObjectCommand);
+
+        const chunks: Uint8Array[] = [];
+        // @ts-ignore
+        for await (const chunk of s3Response.Body) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+
+        // Parse PDF
+        // @ts-ignore
+        let pdfParse;
+        try {
+          pdfParse = require("pdf-parse");
+          if (typeof pdfParse !== 'function' && pdfParse.default) pdfParse = pdfParse.default;
+        } catch (e) {
+          console.error("Failed to require pdf-parse:", e);
+        }
+
+        if (typeof pdfParse === 'function') {
+          const data = await pdfParse(buffer, { max: 1 });
+          const normalizedText = (data.text || "").toLowerCase();
+
+          // Strict RHP check: Must contain "red herring prospectus" and NOT "draft"
+          if (!normalizedText.includes("red herring prospectus") || normalizedText.includes("draft red herring prospectus")) {
+            console.warn(`❌ Invalid RHP content. Rejecting.`);
+            rejectionReason = "Invalid RHP document.";
+            isContentValid = false;
+          } else {
+            isContentValid = true;
+            console.log(`✅ RHP Document content validated.`);
+          }
+        } else {
+          rejectionReason = "Server configuration error: PDF parser not available.";
+        }
+      } catch (valError: any) {
+        console.error("Validation error in uploadRhp:", valError);
+        rejectionReason = "Validation error: " + (valError.message || "Unknown error");
+      }
+
+      if (!isContentValid) {
+        // Delete from R2
+        try {
+          const deleteCommand = new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: fileKey,
+          });
+          await r2Client.send(deleteCommand);
+        } catch (e) { }
+
+        return res.status(400).json({ error: rejectionReason });
+      }
+      // --- VALIDATION END ---
 
       const rhpDoc = new Document(rhpDocData);
       await rhpDoc.save();
