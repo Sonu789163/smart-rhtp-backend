@@ -43,14 +43,14 @@ export const documentController = {
     try {
       const user = req.user;
       const userId = user?._id?.toString();
-      
+
       // Get the workspace domain - for cross-domain users, req.userDomain is set to workspace domain by middleware
       // For same-domain users, req.userDomain equals user.domain
       const workspaceDomain = req.userDomain || req.user?.domain;
       const userDomain = user?.domain;
       const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
       const isSameDomainAdmin = user?.role === "admin" && userDomain === workspaceDomain;
-      
+
       // Same-domain admins of the workspace domain have access to all directories
       if (isSameDomainAdmin) {
         return true;
@@ -125,7 +125,7 @@ export const documentController = {
       // For cross-domain users, req.userDomain should be set to the workspace domain by middleware
       // But if not, we need to get it from the workspace
       const userHomeDomain = req.user?.domain || req.userDomain;
-      
+
       // Get workspace to find its domain
       const { Workspace } = await import("../models/Workspace");
       const workspace = await Workspace.findOne({ workspaceId: currentWorkspace });
@@ -145,8 +145,8 @@ export const documentController = {
       const user = (req as any).user;
       const wsEntry = Array.isArray(user?.accessibleWorkspaces)
         ? user.accessibleWorkspaces.find(
-            (w: any) => w.workspaceDomain === req.userDomain && w.isActive
-          )
+          (w: any) => w.workspaceDomain === req.userDomain && w.isActive
+        )
         : undefined;
 
       // Default to all if no entry found (backward compatibility)
@@ -245,7 +245,7 @@ export const documentController = {
       const userDomain = user?.domain;
       const isSameDomainAdmin = user?.role === "admin" && userDomain && userDomain === workspaceDomain;
       const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
-      
+
       if (isSameDomainAdmin) {
         return res.json(allDocuments);
       }
@@ -339,7 +339,7 @@ export const documentController = {
       if (!currentWorkspace) {
         return res.status(400).json({ error: "Workspace is required" });
       }
-      
+
       // Always use user's actual domain (not workspace slug)
       // req.userDomain might be workspace slug, but we need the actual user domain
       const actualDomain = req.user?.domain || req.userDomain;
@@ -479,7 +479,7 @@ export const documentController = {
       await Chat.deleteMany({ domain: req.userDomain, workspaceId: currentWorkspace, documentId: { $in: docIdsToDelete } });
 
       // Delete reports that reference any of the affected documents as DRHP or RHP
-      await Report.deleteMany({ domain: req.userDomain, workspaceId: currentWorkspace, $or: [ { drhpId: { $in: docIdsToDelete } }, { rhpId: { $in: docIdsToDelete } } ] });
+      await Report.deleteMany({ domain: req.userDomain, workspaceId: currentWorkspace, $or: [{ drhpId: { $in: docIdsToDelete } }, { rhpId: { $in: docIdsToDelete } }] });
 
       // Finally, delete the documents themselves
       await Document.deleteMany({ id: { $in: docIdsToDelete }, domain: req.userDomain, workspaceId: currentWorkspace });
@@ -525,7 +525,7 @@ export const documentController = {
 
       // Determine document type from request body, default to DRHP
       const documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
-      
+
       const docData: any = {
         id: req.body.id || fileKey, // Use provided id from frontend or fallback to fileKey
         name: originalname,
@@ -592,6 +592,7 @@ export const documentController = {
       form.append("domainId", document.domainId || userWithDomain.domainId);
       form.append("workspaceId", document.workspaceId || workspaceId);
       form.append("type", document.type); // Include document type in n8n request
+      form.append("documentType", document.type); // Add camelCase documentType as requested
 
       // Send to n8n and check response for status
       try {
@@ -601,12 +602,12 @@ export const documentController = {
           maxBodyLength: Infinity,
           timeout: 300000, // 5 minutes timeout
         });
-        
+
         // Check if n8n returned a status in the response
         if (n8nResponse?.data) {
           const n8nStatus = n8nResponse.data?.status || n8nResponse.data?.documentStatus;
           const normalizedStatus = n8nStatus?.toLowerCase()?.trim();
-          
+
           // If n8n returned a completed/ready status, update the document immediately
           if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
             document.status = "completed";
@@ -640,9 +641,8 @@ export const documentController = {
       const inline = (req.query.inline as string) === "1";
       res.set({
         "Content-Type": "application/pdf",
-        "Content-Disposition": `${
-          inline ? "inline" : "attachment"
-        }; filename=\"${document.name}\"`,
+        "Content-Disposition": `${inline ? "inline" : "attachment"
+          }; filename=\"${document.name}\"`,
         "Cache-Control": "private, max-age=60",
       });
       const getObjectCommand = new GetObjectCommand({
@@ -713,39 +713,39 @@ export const documentController = {
       // Accept both jobId and documentId from n8n (n8n might send either)
       const { jobId, documentId, status, error } = req.body;
       const identifier = jobId || documentId;
-      
+
       if (!identifier || !status) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: "Missing jobId/documentId or status",
           received: { jobId, documentId, status }
         });
       }
-      
+
       const normalizedStatus = status.trim().toLowerCase();
       console.log(`📥 Received status update for ${identifier}: ${normalizedStatus} (type: ${req.body.type || 'unknown'})`);
-      
+
       // Update document status in MongoDB - try multiple lookup methods
       try {
         let document = await Document.findOne({ id: identifier });
-        
+
         // If not found by id, try by documentId field
         if (!document && documentId) {
           document = await Document.findOne({ id: documentId });
         }
-        
+
         // If still not found, try by fileKey
         if (!document) {
           document = await Document.findOne({ fileKey: identifier });
         }
-        
+
         // If still not found, try by _id (MongoDB ObjectId)
         if (!document && identifier.match(/^[0-9a-fA-F]{24}$/)) {
           document = await Document.findById(identifier);
         }
-        
+
         // Additional lookup: try searching by type if provided (for RHP documents)
         if (!document && req.body.type) {
-          document = await Document.findOne({ 
+          document = await Document.findOne({
             type: req.body.type,
             $or: [
               { id: identifier },
@@ -754,11 +754,11 @@ export const documentController = {
             ]
           });
         }
-        
+
         if (document) {
           // Map n8n status to our document status
           let newStatus = document.status; // Default to current status
-          
+
           if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
             newStatus = "completed";
           } else if (normalizedStatus === "failed" || normalizedStatus === "error") {
@@ -766,17 +766,17 @@ export const documentController = {
           } else if (normalizedStatus === "processing") {
             newStatus = "processing";
           }
-          
+
           // Always update if status is "completed" (force update even if already completed)
           const oldStatus = document.status;
           const shouldUpdate = oldStatus !== newStatus || (newStatus === "completed" && oldStatus === "processing");
-          
+
           if (shouldUpdate) {
             // Update using both methods to ensure persistence
             document.status = newStatus;
             await document.save();
             console.log(`✅ Updated document ${document.id} (${document.name}, type: ${document.type}) status from "${oldStatus}" to "${newStatus}"`);
-            
+
             // Also try to find and update by MongoDB _id to ensure persistence (especially for RHP)
             try {
               const updateResult = await Document.updateOne(
@@ -791,7 +791,7 @@ export const documentController = {
             } catch (updateError) {
               console.error(`⚠️ Secondary update failed (non-critical):`, updateError);
             }
-            
+
             // Verify the update was persisted
             const verifyDoc = await Document.findById(document._id);
             if (verifyDoc && verifyDoc.status === newStatus) {
@@ -802,11 +802,11 @@ export const documentController = {
           } else {
             console.log(`ℹ️ Document ${document.id} (type: ${document.type}) status unchanged: "${oldStatus}"`);
           }
-          
+
           // Use the found document's id for socket emission
           const actualJobId = document.id;
           io.emit("upload_status", { jobId: actualJobId, status: newStatus, error });
-          
+
           res.status(200).json({
             message: "Upload status update processed",
             jobId: actualJobId,
@@ -820,10 +820,10 @@ export const documentController = {
         } else {
           console.warn(`⚠️ Document not found for identifier: ${identifier}`);
           console.warn(`   Tried: id=${identifier}, documentId=${documentId}, fileKey lookup, _id lookup, type-based lookup`);
-          
+
           // Still emit socket event even if document not found (for debugging)
           io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: error || "Document not found" });
-          
+
           res.status(404).json({
             message: "Document not found",
             identifier,
@@ -838,10 +838,10 @@ export const documentController = {
           stack: dbError.stack,
           name: dbError.name,
         });
-        
+
         // Still emit socket event for debugging
         io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: dbError.message });
-        
+
         res.status(500).json({
           message: "Failed to update document status",
           identifier,
@@ -934,6 +934,8 @@ export const documentController = {
       form.append("domain", rhpDoc.domain || user.domain);
       form.append("domainId", rhpDoc.domainId || userWithDomain.domainId);
       form.append("workspaceId", rhpDoc.workspaceId || workspaceId);
+      form.append("type", "RHP");
+      form.append("documentType", "RHP");
 
       // Send to n8n and check response for status
       let finalStatus = "processing"; // Default status
@@ -944,12 +946,12 @@ export const documentController = {
           maxBodyLength: Infinity,
           timeout: 300000, // 5 minutes timeout
         });
-        
+
         // Check if n8n returned a status in the response
         if (n8nResponse?.data) {
           const n8nStatus = n8nResponse.data?.status || n8nResponse.data?.documentStatus;
           const normalizedStatus = n8nStatus?.toLowerCase()?.trim();
-          
+
           // If n8n returned a completed/ready status, update the document immediately
           if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
             rhpDoc.status = "completed";
@@ -987,7 +989,7 @@ export const documentController = {
     try {
       const user = req.user;
       console.log("Admin getAllAdmin - User:", user?.role, "Domain:", req.userDomain);
-      
+
       if (!user || user.role !== "admin") {
         console.log("Admin access denied for user:", user?.role);
         return res.status(403).json({ error: "Admin access required" });
@@ -1010,7 +1012,7 @@ export const documentController = {
       console.log("Admin query:", JSON.stringify(query, null, 2));
       const documents = await Document.find(query).sort({ uploadedAt: -1 });
       console.log("Found documents:", documents.length);
-      
+
       // Get all workspaces to map workspaceId to workspace name
       const { Workspace } = await import("../models/Workspace");
       const workspaces = await Workspace.find({ domain: req.user?.domain || req.userDomain });
@@ -1177,12 +1179,12 @@ export const documentController = {
           domain: req.userDomain,
           workspaceId: currentWorkspace,
         });
-        
+
         if (linkedDocument) {
           linkedDocument.relatedDrhpId = undefined;
           await linkedDocument.save();
         }
-        
+
         document.relatedRhpId = undefined;
         await document.save();
       } else if (document.type === "RHP" && document.relatedDrhpId) {
@@ -1191,12 +1193,12 @@ export const documentController = {
           domain: req.userDomain,
           workspaceId: currentWorkspace,
         });
-        
+
         if (linkedDocument) {
           linkedDocument.relatedRhpId = undefined;
           await linkedDocument.save();
         }
-        
+
         document.relatedDrhpId = undefined;
         await document.save();
       }

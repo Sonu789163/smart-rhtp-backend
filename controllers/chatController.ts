@@ -223,14 +223,15 @@ export const chatController = {
       if (!jobId || !status) {
         return res.status(400).json({ message: "Missing jobId or status" });
       }
+      const normalizedStatus = status.trim().toLowerCase();
       // Only emit on failure
-      if (status.trim().toLowerCase() === "failed") {
-        io.emit("chat_status", { jobId, status, error });
+      if (normalizedStatus === "failed") {
+        io.emit("chat_status", { jobId, status: normalizedStatus, error });
       }
       res.status(200).json({
         message: "Chat status update processed",
         jobId,
-        status,
+        status: normalizedStatus,
         error,
       });
     } catch (err) {
