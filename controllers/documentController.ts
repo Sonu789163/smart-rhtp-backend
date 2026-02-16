@@ -675,16 +675,20 @@ export const documentController = {
         // Parse PDF to get text
         const data = await pdfParse(buffer, { max: 1 }); // Only parse first page
         const text = data.text;
+        // Clean text: replace newlines with spaces and multiple spaces with single space
+        const cleanedText = text.replace(/\n/g, " ").replace(/\s+/g, " ").toLowerCase();
+
         let isValid = false;
-        const normalizedText = text.toLowerCase();
 
         if (documentType === "DRHP") {
           // Check for "Draft Red Herring Prospectus"
-          isValid = normalizedText.includes("draft red herring prospectus");
+          isValid = cleanedText.includes("draft red herring prospectus");
         } else if (documentType === "RHP") {
           // Check for "Red Herring Prospectus" AND ensure it's NOT a draft
-          isValid = normalizedText.includes("red herring prospectus") &&
-            !normalizedText.includes("draft red herring prospectus");
+          // Also check ensuring 'draft' word matches whole word or isn't part of the main title phrase
+          // Simple check: shouldn't contain "draft red herring prospectus"
+          isValid = cleanedText.includes("red herring prospectus") &&
+            !cleanedText.includes("draft red herring prospectus");
         }
 
         if (!isValid) {
@@ -701,7 +705,7 @@ export const documentController = {
           await Document.findByIdAndDelete(document._id);
 
           return res.status(400).json({
-            error: `Invalid ${documentType} document`
+            error: `Invalid document type. Please upload a valid ${documentType} document.`
           });
         }
 
