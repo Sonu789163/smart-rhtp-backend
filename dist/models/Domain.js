@@ -32,6 +32,13 @@ const domainSchema = new mongoose_1.default.Schema({
         default: "active",
         index: true,
     },
+    investor_match_only: { type: Boolean, default: false },
+    valuation_matching: { type: Boolean, default: false },
+    adverse_finding: { type: Boolean, default: false },
+    target_investors: { type: [String], default: [] },
+    custom_summary_sop: { type: String, default: "" },
+    validator_checklist: { type: [String], default: [] },
+    custom_validator_prompt: { type: String, default: "" }
 });
 // Generate domainId before saving
 domainSchema.pre("save", async function (next) {

@@ -19,6 +19,7 @@ import workspaceRoutes from "./routes/workspace.routes";
 import workspaceRequestRoutes from "./routes/workspaceRequest.routes";
 import newsCrawlRoutes from "./routes/newsCrawl.routes";
 import newsArticleRoutes from "./routes/newsArticle.routes";
+import domainRoutes from "./routes/domain.routes";
 import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import helmet from "helmet";
@@ -100,6 +101,10 @@ app.use(
 app.options('*', cors());
 
 app.use(express.json());
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
 app.use(passport.initialize());
 
 // Security middleware - configure helmet to work with CORS
@@ -208,6 +213,7 @@ app.use("/api/workspaces", workspaceRoutes);
 app.use("/api/workspace-requests", workspaceRequestRoutes);
 app.use("/api/news-crawl", newsCrawlRoutes);
 app.use("/api/news-articles", newsArticleRoutes);
+app.use("/api/domain", domainRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {

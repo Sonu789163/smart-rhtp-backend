@@ -48,6 +48,8 @@ const authMiddleware = async (req, res, next) => {
             // Fallback to user's domain if no workspace header
             req.currentWorkspace = user.domain;
         }
+        // Set userDomain for consistency
+        req.userDomain = user.domainId;
         next();
     }
     catch (error) {

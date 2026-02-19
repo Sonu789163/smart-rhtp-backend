@@ -40,16 +40,17 @@ exports.documentController = void 0;
 const Document_1 = require("../models/Document");
 const SharePermission_1 = require("../models/SharePermission");
 const Directory_1 = require("../models/Directory");
+const Domain_1 = require("../models/Domain");
 const User_1 = require("../models/User");
 const axios_1 = __importDefault(require("axios"));
 const index_1 = require("../index");
 const r2_1 = require("../config/r2");
 const events_1 = require("../lib/events");
 const client_s3_1 = require("@aws-sdk/client-s3");
+const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
 const Summary_1 = require("../models/Summary");
 const Report_1 = require("../models/Report");
 const Chat_1 = require("../models/Chat");
-const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
 exports.documentController = {
     // Helper to normalize namespace consistently (trim, preserve .pdf extension)
     // Keep case as-is; rely on Mongo collation for case-insensitive uniqueness
@@ -65,6 +66,15 @@ exports.documentController = {
         // Trim again
         s = s.trim();
         return s;
+    },
+    // Helper to generate a pre-signed URL for a file in R2
+    async getPresignedUrl(fileKey) {
+        const command = new client_s3_1.GetObjectCommand({
+            Bucket: r2_1.R2_BUCKET,
+            Key: fileKey,
+        });
+        // URL expires in 1 hour
+        return await (0, s3_request_presigner_1.getSignedUrl)(r2_1.r2Client, command, { expiresIn: 3600 });
     },
     // Helper to check if user has access to a directory
     async hasDirectoryAccess(req, directoryId) {
@@ -717,7 +727,6 @@ exports.documentController = {
             res.status(500).json({ error: "Failed to update document" });
         }
     },
-    // restore disabled while trash functionality is off
     async delete(req, res) {
         var _a, _b, _c;
         try {
@@ -750,12 +759,12 @@ exports.documentController = {
             }
             // Build list of document ids to cascade delete against (only the document being deleted)
             const docIdsToDelete = [document.id];
-            let linkedRhpId = null;
-            let linkedRhpDoc = null;
+            // let linkedRhpId: string | null = null;
+            // let linkedRhpDoc: any = null;
             // If deleting a DRHP, unlink from RHP (don't delete RHP)
             if (document.type === "DRHP" && document.relatedRhpId) {
-                linkedRhpId = document.relatedRhpId;
-                linkedRhpDoc = await Document_1.Document.findOne({ id: linkedRhpId, domain: req.userDomain, workspaceId: currentWorkspace });
+                const linkedRhpId = document.relatedRhpId;
+                const linkedRhpDoc = await Document_1.Document.findOne({ id: linkedRhpId, domain: req.userDomain, workspaceId: currentWorkspace });
                 if (linkedRhpDoc) {
                     // Unlink RHP from DRHP
                     linkedRhpDoc.relatedDrhpId = undefined;
@@ -866,7 +875,7 @@ exports.documentController = {
                 action: "document.deleted",
                 resourceType: "document",
                 resourceId: document.id,
-                title: `Document deleted: ${document.name}`,
+                title: `Document deleted: ${document.name} `,
                 notifyWorkspace: true,
             });
             res.json({ message: "Document and related artifacts deleted successfully" });
@@ -877,7 +886,7 @@ exports.documentController = {
         }
     },
     async uploadDocument(req, res) {
-        var _a, _b, _c;
+        var _a, _b, _c, _d;
         try {
             if (!req.file) {
                 return res.status(400).json({ error: "No file uploaded" });
@@ -897,7 +906,7 @@ exports.documentController = {
                 return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
             }
             // Determine document type from request body, default to DRHP
-            const documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
+            let documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
             // NEW: Directory is now required for document upload (directory-first approach)
             const directoryId = req.body.directoryId === "root" ? null : req.body.directoryId;
             if (!directoryId) {
@@ -959,6 +968,90 @@ exports.documentController = {
             else if (user === null || user === void 0 ? void 0 : user._id) {
                 docData.userId = user._id.toString();
             }
+            // --- VALIDATION START ---
+            // Download file to validate content (DRHP vs RHP)
+            let isContentValid = false;
+            let rejectionReason = "Document validation failed. Unable to verify document content.";
+            try {
+                const getObjectCommand = new client_s3_1.GetObjectCommand({
+                    Bucket: r2_1.R2_BUCKET,
+                    Key: fileKey,
+                });
+                const s3Response = await r2_1.r2Client.send(getObjectCommand);
+                const chunks = [];
+                // @ts-ignore
+                for await (const chunk of s3Response.Body) {
+                    chunks.push(chunk);
+                }
+                const buffer = Buffer.concat(chunks);
+                // Parse PDF
+                // @ts-ignore
+                let pdfParse;
+                try {
+                    pdfParse = require("pdf-parse");
+                    if (typeof pdfParse !== 'function' && pdfParse.default)
+                        pdfParse = pdfParse.default;
+                }
+                catch (e) {
+                    console.error("Failed to require pdf-parse:", e);
+                }
+                if (typeof pdfParse === 'function') {
+                    const data = await pdfParse(buffer, { max: 1 });
+                    const normalizedText = (data.text || "").toLowerCase();
+                    let detectedType = null;
+                    if (normalizedText.includes("draft red herring prospectus")) {
+                        detectedType = "DRHP";
+                    }
+                    else if (normalizedText.includes("red herring prospectus")) {
+                        // If strictly red herring and NOT draft
+                        if (!normalizedText.includes("draft red herring prospectus")) {
+                            detectedType = "RHP";
+                        }
+                    }
+                    if (!detectedType) {
+                        // Invalid document
+                        console.warn(`❌ Invalid document content. Rejecting.`);
+                        const targetType = req.body.type || "DRHP";
+                        rejectionReason = `Invalid ${targetType} document.`;
+                        isContentValid = false;
+                    }
+                    else {
+                        // Strict validation: Content must match requested type
+                        if (req.body.type && req.body.type !== detectedType) {
+                            console.warn(`❌ Type mismatch. Requested: ${req.body.type}, Detected: ${detectedType}`);
+                            rejectionReason = `Document type mismatch. You are trying to upload a ${detectedType} as ${req.body.type}. Please upload the correct document.`;
+                            isContentValid = false;
+                        }
+                        else {
+                            // Apply detected type
+                            documentType = detectedType;
+                            docData.type = documentType;
+                            isContentValid = true;
+                            console.log(`✅ Document identified as ${documentType}`);
+                        }
+                    }
+                }
+                else {
+                    rejectionReason = "Server configuration error: PDF parser not available.";
+                }
+            }
+            catch (valError) {
+                console.error("Validation error:", valError);
+                rejectionReason = "Validation error: " + (valError.message || "Unknown error");
+            }
+            if (!isContentValid) {
+                // Delete from R2
+                try {
+                    const deleteCommand = new client_s3_1.DeleteObjectCommand({
+                        Bucket: r2_1.R2_BUCKET,
+                        Key: fileKey,
+                    });
+                    await r2_1.r2Client.send(deleteCommand);
+                }
+                catch (e) { }
+                return res.status(400).json({ error: rejectionReason });
+            }
+            // --- VALIDATION END ---
             const document = new Document_1.Document(docData);
             await document.save();
             // NEW: Update directory statistics (use the actual directory ID that was used)
@@ -982,21 +1075,16 @@ exports.documentController = {
                 action: "document.uploaded",
                 resourceType: "document",
                 resourceId: document.id,
-                title: `Document uploaded: ${document.name}`,
+                title: `Document uploaded: ${document.name} `,
                 notifyWorkspace: true,
             });
-            // Notify Python AI Platform for further processing
-            const pythonPlatformUrl = process.env.PYTHON_PLATFORM_URL || "http://localhost:8000";
+            // --- INTEGRATION: CALL PYTHON API INSTEAD OF N8N ---
+            const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
             try {
-                // Generate pre-signed URL for the Python worker to download the file directly from R2
-                const getObjectCommand = new client_s3_1.GetObjectCommand({
-                    Bucket: r2_1.R2_BUCKET,
-                    Key: fileKey,
-                });
-                const signedUrl = await (0, s3_request_presigner_1.getSignedUrl)(r2_1.r2Client, getObjectCommand, { expiresIn: 3600 }); // 1 hour
-                console.log(`🚀 Sending document to Python AI Platform: ${documentType}`);
-                await axios_1.default.post(`${pythonPlatformUrl}/jobs/document`, {
-                    file_url: signedUrl,
+                const fileUrl = await this.getPresignedUrl(fileKey);
+                console.log(`Sending document to Python API: ${pythonApiUrl} /jobs/document`);
+                const pythonResponse = await axios_1.default.post(`${pythonApiUrl} /jobs/document`, {
+                    file_url: fileUrl,
                     file_type: "pdf",
                     metadata: {
                         filename: document.name,
@@ -1004,15 +1092,24 @@ exports.documentController = {
                         documentId: document.id,
                         domain: document.domain || user.domain,
                         domainId: document.domainId || userWithDomain.domainId,
-                        workspaceId: document.workspaceId || workspaceId
+                        workspaceId: document.workspaceId || workspaceId,
+                        directoryId: finalDirectoryId
                     }
                 }, {
-                    headers: { "Content-Type": "application/json" },
-                    timeout: 30000
+                    timeout: 60000 // 1 minute timeout for the initial call
                 });
+                if (pythonResponse.data && pythonResponse.data.status === "success") {
+                    console.log(`✅ Document ${document.id} successfully sent to Python API`);
+                    // Note: Python API is synchronous in this specific endpoint but 
+                    // also sends a background notification. We can update status if it finished.
+                    if ((_d = pythonResponse.data.details) === null || _d === void 0 ? void 0 : _d.success) {
+                        document.status = "completed";
+                        await document.save();
+                    }
+                }
             }
             catch (pythonErr) {
-                console.error("❌ Failed to notify Python AI Platform:", pythonErr.message);
+                console.error("Failed to call Python Ingestion API:", pythonErr.message);
             }
             res.status(201).json({ message: "File uploaded successfully", document });
         }
@@ -1024,21 +1121,25 @@ exports.documentController = {
     async downloadDocument(req, res) {
         var _a, _b;
         try {
+            // Workspace is required
             const currentWorkspace = req.currentWorkspace;
             if (!currentWorkspace) {
                 return res.status(400).json({ error: "Workspace is required" });
             }
+            // Get workspace to find its domain
             const { Workspace } = await Promise.resolve().then(() => __importStar(require("../models/Workspace")));
             const workspace = await Workspace.findOne({ workspaceId: currentWorkspace });
             const workspaceDomain = (workspace === null || workspace === void 0 ? void 0 : workspace.domain) || req.userDomain;
             const userDomain = (_a = req.user) === null || _a === void 0 ? void 0 : _a.domain;
             const isCrossDomainUser = userDomain && userDomain !== workspaceDomain;
             const isSameDomainAdmin = ((_b = req.user) === null || _b === void 0 ? void 0 : _b.role) === "admin" && userDomain === workspaceDomain;
+            // First, try to find document in current workspace/domain
             let document = await Document_1.Document.findOne({
                 id: req.params.id,
                 domain: workspaceDomain,
                 workspaceId: currentWorkspace,
             });
+            // If not found, check if it's in a shared directory's original directory
             if (!document) {
                 const { Directory } = await Promise.resolve().then(() => __importStar(require("../models/Directory")));
                 const sharedDirectories = await Directory.find({
@@ -1064,11 +1165,15 @@ exports.documentController = {
             if (!document || !document.fileKey) {
                 return res.status(404).json({ error: "Document not found or no file" });
             }
+            // Check access to the document's directory
+            // Same-domain admins have access to all documents
             if (!isSameDomainAdmin) {
+                // For same-domain users in the same workspace, allow access
                 const isSameDomainSameWorkspace = !isCrossDomainUser &&
                     document.workspaceId === currentWorkspace &&
                     document.domain === workspaceDomain;
                 if (!isSameDomainSameWorkspace) {
+                    // For cross-domain users or documents from different workspaces, check directory access
                     const hasAccess = await exports.documentController.hasDirectoryAccess(req, document.directoryId || null);
                     if (!hasAccess) {
                         return res.status(403).json({ error: "You do not have access to this document" });
@@ -1078,7 +1183,7 @@ exports.documentController = {
             const inline = req.query.inline === "1";
             res.set({
                 "Content-Type": "application/pdf",
-                "Content-Disposition": `${inline ? "inline" : "attachment"}; filename=\"${document.name}\"`,
+                "Content-Disposition": `${inline ? "inline" : "attachment"}; filename =\"${document.name}\"`,
                 "Cache-Control": "private, max-age=60",
             });
             const getObjectCommand = new client_s3_1.GetObjectCommand({
@@ -1104,17 +1209,21 @@ exports.documentController = {
         try {
             const { namespace } = req.query;
             if (!namespace) {
-                return res.status(400).json({ error: "Namespace parameter is required" });
+                return res
+                    .status(400)
+                    .json({ error: "Namespace parameter is required" });
             }
+            // Use namespace as-is to preserve .pdf extension
             const queryNamespace = namespace;
+            // Workspace is required
             const currentWorkspace = req.currentWorkspace;
             if (!currentWorkspace) {
                 return res.status(400).json({ error: "Workspace is required" });
             }
             const query = {
                 namespace: queryNamespace,
-                domain: req.userDomain,
-                workspaceId: currentWorkspace,
+                domain: req.userDomain, // Check within user's domain only
+                workspaceId: currentWorkspace, // Check within user's workspace only
             };
             const existingDocument = await Document_1.Document.findOne(query).collation({
                 locale: "en",
@@ -1141,6 +1250,7 @@ exports.documentController = {
     },
     async uploadStatusUpdate(req, res) {
         try {
+            // Accept both jobId and documentId from n8n (n8n might send either)
             const { jobId, documentId, status, error } = req.body;
             const identifier = jobId || documentId;
             if (!identifier || !status) {
@@ -1150,17 +1260,36 @@ exports.documentController = {
                 });
             }
             const normalizedStatus = status.trim().toLowerCase();
-            console.log(`📥 Received status update for ${identifier}: ${normalizedStatus}`);
+            console.log(`📥 Received status update for ${identifier}: ${normalizedStatus} (type: ${req.body.type || 'unknown'})`);
+            // Update document status in MongoDB - try multiple lookup methods
             try {
                 let document = await Document_1.Document.findOne({ id: identifier });
-                if (!document && documentId)
+                // If not found by id, try by documentId field
+                if (!document && documentId) {
                     document = await Document_1.Document.findOne({ id: documentId });
-                if (!document)
+                }
+                // If still not found, try by fileKey
+                if (!document) {
                     document = await Document_1.Document.findOne({ fileKey: identifier });
-                if (!document && identifier.match(/^[0-9a-fA-F]{24}$/))
+                }
+                // If still not found, try by _id (MongoDB ObjectId)
+                if (!document && identifier.match(/^[0-9a-fA-F]{24}$/)) {
                     document = await Document_1.Document.findById(identifier);
+                }
+                // Additional lookup: try searching by type if provided (for RHP documents)
+                if (!document && req.body.type) {
+                    document = await Document_1.Document.findOne({
+                        type: req.body.type,
+                        $or: [
+                            { id: identifier },
+                            { fileKey: identifier },
+                            { documentId: identifier }
+                        ]
+                    });
+                }
                 if (document) {
-                    let newStatus = document.status;
+                    // Map n8n status to our document status
+                    let newStatus = document.status; // Default to current status
                     if (normalizedStatus === "completed" || normalizedStatus === "ready" || normalizedStatus === "complete") {
                         newStatus = "completed";
                     }
@@ -1170,33 +1299,94 @@ exports.documentController = {
                     else if (normalizedStatus === "processing") {
                         newStatus = "processing";
                     }
-                    if (document.status !== newStatus) {
+                    // Always update if status is "completed" (force update even if already completed)
+                    const oldStatus = document.status;
+                    const shouldUpdate = oldStatus !== newStatus || (newStatus === "completed" && oldStatus === "processing");
+                    if (shouldUpdate) {
+                        // Update using both methods to ensure persistence
                         document.status = newStatus;
                         await document.save();
-                        await Document_1.Document.updateOne({ _id: document._id }, { $set: { status: newStatus } });
+                        console.log(`✅ Updated document ${document.id} (${document.name}, type: ${document.type}) status from "${oldStatus}" to "${newStatus}"`);
+                        // Also try to find and update by MongoDB _id to ensure persistence (especially for RHP)
+                        try {
+                            const updateResult = await Document_1.Document.updateOne({ _id: document._id }, { $set: { status: newStatus } });
+                            if (updateResult.modifiedCount > 0) {
+                                console.log(`✅ Confirmed MongoDB update for document ${document.id} (type: ${document.type})`);
+                            }
+                            else {
+                                console.log(`ℹ️ MongoDB update confirmed (no changes needed) for document ${document.id} (type: ${document.type})`);
+                            }
+                        }
+                        catch (updateError) {
+                            console.error(`⚠️ Secondary update failed (non-critical):`, updateError);
+                        }
+                        // Verify the update was persisted
+                        const verifyDoc = await Document_1.Document.findById(document._id);
+                        if (verifyDoc && verifyDoc.status === newStatus) {
+                            console.log(`✅ Verified: Document ${document.id} status is now "${verifyDoc.status}" in database`);
+                        }
+                        else {
+                            console.warn(`⚠️ Warning: Document ${document.id} status verification failed. Expected: "${newStatus}", Got: "${verifyDoc === null || verifyDoc === void 0 ? void 0 : verifyDoc.status}"`);
+                        }
                     }
-                    index_1.io.emit("upload_status", { jobId: document.id, status: newStatus, error });
+                    else {
+                        console.log(`ℹ️ Document ${document.id} (type: ${document.type}) status unchanged: "${oldStatus}"`);
+                    }
+                    // Use the found document's id for socket emission
+                    const actualJobId = document.id;
+                    index_1.io.emit("upload_status", { jobId: actualJobId, status: newStatus, error });
                     res.status(200).json({
                         message: "Upload status update processed",
-                        jobId: document.id,
+                        jobId: actualJobId,
+                        documentId: document.id,
+                        documentType: document.type,
                         status: normalizedStatus,
+                        previousStatus: oldStatus,
                         newStatus: newStatus,
                         error,
                     });
                 }
                 else {
-                    res.status(404).json({ message: "Document not found", identifier });
+                    console.warn(`⚠️ Document not found for identifier: ${identifier}`);
+                    console.warn(`   Tried: id=${identifier}, documentId=${documentId}, fileKey lookup, _id lookup, type-based lookup`);
+                    // Still emit socket event even if document not found (for debugging)
+                    index_1.io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: error || "Document not found" });
+                    res.status(404).json({
+                        message: "Document not found",
+                        identifier,
+                        status: normalizedStatus,
+                        error: "Document not found in database",
+                    });
                 }
             }
             catch (dbError) {
-                res.status(500).json({ message: "Database error", error: dbError.message });
+                console.error("❌ Error updating document status in database:", dbError);
+                console.error("   Error details:", {
+                    message: dbError.message,
+                    stack: dbError.stack,
+                    name: dbError.name,
+                });
+                // Still emit socket event for debugging
+                index_1.io.emit("upload_status", { jobId: identifier, status: normalizedStatus, error: dbError.message });
+                res.status(500).json({
+                    message: "Failed to update document status",
+                    identifier,
+                    status: normalizedStatus,
+                    error: dbError.message || "Database error",
+                });
             }
         }
         catch (err) {
-            res.status(500).json({ message: "Failed to process update", error: String(err) });
+            console.error("❌ Error in uploadStatusUpdate:", err);
+            console.error("   Full error:", JSON.stringify(err, Object.getOwnPropertyNames(err)));
+            res.status(500).json({
+                message: "Failed to process upload status update",
+                error: err instanceof Error ? err.message : String(err),
+            });
         }
     },
     async uploadRhp(req, res) {
+        var _a, _b, _c, _d;
         try {
             const { drhpId } = req.body;
             if (!req.file)
@@ -1208,75 +1398,171 @@ exports.documentController = {
                 return res.status(404).json({ error: "DRHP not found" });
             const fileKey = req.file.key;
             const user = req.user;
+            // Workspace is required for document upload
             const workspaceId = req.currentWorkspace;
             if (!workspaceId) {
-                return res.status(400).json({ error: "Workspace is required." });
+                return res.status(400).json({ error: "Workspace is required. Please select a workspace." });
             }
+            // Create RHP namespace by appending "-rhp" to the DRHP namespace
+            const rhpNamespace = req.file.originalname;
+            // Get user's domainId
             const userWithDomain = await User_1.User.findById(user._id).select("domainId");
             if (!(userWithDomain === null || userWithDomain === void 0 ? void 0 : userWithDomain.domainId)) {
-                return res.status(400).json({ error: "User domainId not found." });
+                return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
             }
+            // Fetch full domain config
+            const domainConfig = await Domain_1.Domain.findOne({ domainId: userWithDomain.domainId });
             const rhpDocData = {
                 id: fileKey,
                 fileKey: fileKey,
-                name: req.file.originalname,
-                namespace: req.file.originalname,
+                name: req.file.originalname, // Use original filename with .pdf extension
+                namespace: req.file.originalname, // Use original filename with .pdf extension
+                rhpNamespace: rhpNamespace,
                 type: "RHP",
-                status: "processing",
+                status: "processing", // Set status to processing initially - n8n will update to completed
                 relatedDrhpId: drhp.id,
-                domain: user.domain,
-                domainId: userWithDomain.domainId,
-                workspaceId,
+                domain: user.domain, // Add domain for workspace isolation - backward compatibility
+                domainId: userWithDomain.domainId, // Link to Domain schema
+                workspaceId, // Workspace required - middleware ensures it's set
             };
-            if (user === null || user === void 0 ? void 0 : user.microsoftId)
+            // Add user information if available
+            if (user === null || user === void 0 ? void 0 : user.microsoftId) {
                 rhpDocData.microsoftId = user.microsoftId;
-            else if (user === null || user === void 0 ? void 0 : user._id)
+            }
+            else if (user === null || user === void 0 ? void 0 : user._id) {
                 rhpDocData.userId = user._id.toString();
-            const rhpDoc = new Document_1.Document(rhpDocData);
-            await rhpDoc.save();
-            drhp.relatedRhpId = rhpDoc.id;
-            await drhp.save();
-            const pythonPlatformUrl = process.env.PYTHON_PLATFORM_URL || "http://localhost:8000";
+            }
+            // --- VALIDATION START FOR RHP ---
+            let isContentValid = false;
+            let rejectionReason = "Document validation failed. Unable to verify document content.";
             try {
                 const getObjectCommand = new client_s3_1.GetObjectCommand({
                     Bucket: r2_1.R2_BUCKET,
                     Key: fileKey,
                 });
-                const signedUrl = await (0, s3_request_presigner_1.getSignedUrl)(r2_1.r2Client, getObjectCommand, { expiresIn: 3600 });
-                await axios_1.default.post(`${pythonPlatformUrl}/jobs/document`, {
-                    file_url: signedUrl,
+                const s3Response = await r2_1.r2Client.send(getObjectCommand);
+                const chunks = [];
+                // @ts-ignore
+                for await (const chunk of s3Response.Body) {
+                    chunks.push(chunk);
+                }
+                const buffer = Buffer.concat(chunks);
+                // Parse PDF
+                // @ts-ignore
+                let pdfParse;
+                try {
+                    pdfParse = require("pdf-parse");
+                    if (typeof pdfParse !== 'function' && pdfParse.default)
+                        pdfParse = pdfParse.default;
+                }
+                catch (e) {
+                    console.error("Failed to require pdf-parse:", e);
+                }
+                if (typeof pdfParse === 'function') {
+                    const data = await pdfParse(buffer, { max: 1 });
+                    const normalizedText = (data.text || "").toLowerCase();
+                    // Strict RHP check: Must contain "red herring prospectus" and NOT "draft"
+                    if (!normalizedText.includes("red herring prospectus") || normalizedText.includes("draft red herring prospectus")) {
+                        console.warn(`❌ Invalid RHP content. Rejecting.`);
+                        rejectionReason = "Invalid RHP document.";
+                        isContentValid = false;
+                    }
+                    else {
+                        isContentValid = true;
+                        console.log(`✅ RHP Document content validated.`);
+                    }
+                }
+                else {
+                    rejectionReason = "Server configuration error: PDF parser not available.";
+                }
+            }
+            catch (valError) {
+                console.error("Validation error in uploadRhp:", valError);
+                rejectionReason = "Validation error: " + (valError.message || "Unknown error");
+            }
+            if (!isContentValid) {
+                // Delete from R2
+                try {
+                    const deleteCommand = new client_s3_1.DeleteObjectCommand({
+                        Bucket: r2_1.R2_BUCKET,
+                        Key: fileKey,
+                    });
+                    await r2_1.r2Client.send(deleteCommand);
+                }
+                catch (e) { }
+                return res.status(400).json({ error: rejectionReason });
+            }
+            // --- VALIDATION END ---
+            const rhpDoc = new Document_1.Document(rhpDocData);
+            await rhpDoc.save();
+            drhp.relatedRhpId = rhpDoc.id;
+            await drhp.save();
+            // --- INTEGRATION: CALL PYTHON API INSTEAD OF N8N ---
+            const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+            let finalStatus = "processing";
+            try {
+                const fileUrl = await this.getPresignedUrl(fileKey);
+                console.log(`Sending RHP document to Python API: ${pythonApiUrl}/jobs/document`);
+                const pythonResponse = await axios_1.default.post(`${pythonApiUrl}/jobs/document`, {
+                    file_url: fileUrl,
                     file_type: "pdf",
                     metadata: {
                         filename: rhpDoc.name,
                         doc_type: "rhp",
                         documentId: rhpDoc.id,
-                        domain: rhpDoc.domain,
-                        domainId: rhpDoc.domainId,
-                        workspaceId: rhpDoc.workspaceId
+                        relatedDrhpId: drhp.id,
+                        domain: rhpDoc.domain || user.domain,
+                        domainId: rhpDoc.domainId || userWithDomain.domainId,
+                        workspaceId: rhpDoc.workspaceId || workspaceId,
+                        // Multi-tenant configuration injection
+                        custom_summary_sop: (domainConfig === null || domainConfig === void 0 ? void 0 : domainConfig.custom_summary_sop) || "",
+                        target_investors: (domainConfig === null || domainConfig === void 0 ? void 0 : domainConfig.target_investors) || [],
+                        investor_match_only: (_a = domainConfig === null || domainConfig === void 0 ? void 0 : domainConfig.investor_match_only) !== null && _a !== void 0 ? _a : true,
+                        valuation_matching: (_b = domainConfig === null || domainConfig === void 0 ? void 0 : domainConfig.valuation_matching) !== null && _b !== void 0 ? _b : true,
+                        adverse_finding: (_c = domainConfig === null || domainConfig === void 0 ? void 0 : domainConfig.adverse_finding) !== null && _c !== void 0 ? _c : true
                     }
+                }, {
+                    timeout: 60000
                 });
+                if (pythonResponse.data && pythonResponse.data.status === "success") {
+                    console.log(`✅ RHP Document ${rhpDoc.id} successfully sent to Python API`);
+                    if ((_d = pythonResponse.data.details) === null || _d === void 0 ? void 0 : _d.success) {
+                        rhpDoc.status = "completed";
+                        await rhpDoc.save();
+                        finalStatus = "completed";
+                    }
+                }
             }
             catch (pythonErr) {
-                console.error("❌ Failed to notify Python platform for RHP:", pythonErr.message);
+                console.error("Failed to call Python Ingestion API for RHP:", pythonErr.message);
             }
-            index_1.io.emit("upload_status", { jobId: rhpDoc.id, status: "processing" });
-            res.status(201).json({ message: "RHP uploaded and linked", document: rhpDoc });
+            // Emit upload status (use the actual status from n8n or default to processing)
+            const jobId = rhpDoc.id;
+            index_1.io.emit("upload_status", { jobId, status: finalStatus });
+            res
+                .status(201)
+                .json({ message: "RHP uploaded and linked", document: rhpDoc });
         }
         catch (error) {
             console.error("Error uploading RHP:", error);
             res.status(500).json({ error: "Failed to upload RHP" });
         }
     },
+    // Admin: Get all documents across all workspaces in domain
     async getAllAdmin(req, res) {
         var _a, _b, _c;
         try {
             const user = req.user;
+            console.log("Admin getAllAdmin - User:", user === null || user === void 0 ? void 0 : user.role, "Domain:", req.userDomain);
             if (!user || user.role !== "admin") {
+                console.log("Admin access denied for user:", user === null || user === void 0 ? void 0 : user.role);
                 return res.status(403).json({ error: "Admin access required" });
             }
+            // Admin query: get all documents for the domain (don't filter by workspaceId)
             const query = {
-                domain: ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain) || req.userDomain,
+                domain: ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain) || req.userDomain, // Use user's actual domain for admin
             };
+            // Also check domainId if available
             const userWithDomain = await User_1.User.findById(req.user._id).select("domainId");
             if (userWithDomain === null || userWithDomain === void 0 ? void 0 : userWithDomain.domainId) {
                 query.$or = [
@@ -1284,14 +1570,23 @@ exports.documentController = {
                     { domainId: userWithDomain.domainId }
                 ];
             }
+            console.log("Admin query:", JSON.stringify(query, null, 2));
             const documents = await Document_1.Document.find(query).sort({ uploadedAt: -1 });
+            console.log("Found documents:", documents.length);
+            // Get all workspaces to map workspaceId to workspace name
             const { Workspace } = await Promise.resolve().then(() => __importStar(require("../models/Workspace")));
             const workspaces = await Workspace.find({ domain: ((_c = req.user) === null || _c === void 0 ? void 0 : _c.domain) || req.userDomain });
+            console.log("Found workspaces:", workspaces.length);
             const workspaceMap = new Map(workspaces.map(ws => [ws.workspaceId, { workspaceId: ws.workspaceId, name: ws.name, slug: ws.slug }]));
-            const documentsWithWorkspace = documents.map(doc => ({
-                ...doc.toObject(),
-                workspaceId: workspaceMap.get(doc.workspaceId) || { workspaceId: doc.workspaceId, name: "Excollo", slug: "unknown" }
-            }));
+            // Add workspace information to each document
+            const documentsWithWorkspace = documents.map(doc => {
+                var _a, _b;
+                return ({
+                    ...doc.toObject(),
+                    workspaceId: workspaceMap.get(doc.workspaceId) || { workspaceId: doc.workspaceId, name: ((_a = workspaceMap.get(doc.workspaceId)) === null || _a === void 0 ? void 0 : _a.name) ? (_b = workspaceMap.get(doc.workspaceId)) === null || _b === void 0 ? void 0 : _b.name : 'Excollo', slug: 'unknown' }
+                });
+            });
+            console.log("Returning documents with workspace info:", documentsWithWorkspace.length);
             res.json(documentsWithWorkspace);
         }
         catch (error) {
@@ -1303,18 +1598,23 @@ exports.documentController = {
         try {
             const { id } = req.params;
             const currentWorkspace = req.currentWorkspace || req.userDomain;
+            // Get the document to compare with
             const document = await Document_1.Document.findOne({
                 id,
                 domain: req.userDomain,
                 workspaceId: currentWorkspace,
             });
-            if (!document)
+            if (!document) {
                 return res.status(404).json({ error: "Document not found" });
+            }
+            // Determine the opposite document type
             const oppositeType = document.type === "DRHP" ? "RHP" : "DRHP";
+            // Get all documents of the opposite type that are not already linked
             const availableDocuments = await Document_1.Document.find({
                 domain: req.userDomain,
                 workspaceId: currentWorkspace,
                 type: oppositeType,
+                // Exclude documents that are already linked to this document
                 $and: [
                     { id: { $ne: document.id } },
                     { relatedDrhpId: { $ne: document.id } },
@@ -1322,11 +1622,17 @@ exports.documentController = {
                 ]
             }).select('id name type uploadedAt namespace').sort({ uploadedAt: -1 });
             res.json({
-                selectedDocument: { id: document.id, name: document.name, type: document.type, uploadedAt: document.uploadedAt },
+                selectedDocument: {
+                    id: document.id,
+                    name: document.name,
+                    type: document.type,
+                    uploadedAt: document.uploadedAt
+                },
                 availableDocuments
             });
         }
         catch (error) {
+            console.error("Error fetching available documents for compare:", error);
             res.status(500).json({ error: "Failed to fetch available documents" });
         }
     },
@@ -1335,51 +1641,138 @@ exports.documentController = {
         try {
             const { drhpId, rhpId } = req.body;
             const currentWorkspace = req.currentWorkspace || req.userDomain;
-            if (!drhpId || !rhpId)
-                return res.status(400).json({ error: "IDs required" });
-            const drhpDoc = await Document_1.Document.findOne({ id: drhpId, domain: req.userDomain, workspaceId: currentWorkspace, type: "DRHP" });
-            const rhpDoc = await Document_1.Document.findOne({ id: rhpId, domain: req.userDomain, workspaceId: currentWorkspace, type: "RHP" });
-            if (!drhpDoc || !rhpDoc)
-                return res.status(404).json({ error: "Documents not found" });
+            if (!drhpId || !rhpId) {
+                return res.status(400).json({ error: "Both DRHP and RHP IDs are required" });
+            }
+            // Verify both documents exist and belong to the user
+            const drhpDoc = await Document_1.Document.findOne({
+                id: drhpId,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+                type: "DRHP"
+            });
+            const rhpDoc = await Document_1.Document.findOne({
+                id: rhpId,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+                type: "RHP"
+            });
+            if (!drhpDoc || !rhpDoc) {
+                return res.status(404).json({ error: "One or both documents not found" });
+            }
+            // Check if documents are already linked
+            if (drhpDoc.relatedRhpId === rhpId || rhpDoc.relatedDrhpId === drhpId) {
+                return res.status(400).json({ error: "Documents are already linked" });
+            }
+            // Link the documents
             drhpDoc.relatedRhpId = rhpId;
             rhpDoc.relatedDrhpId = drhpId;
             await drhpDoc.save();
             await rhpDoc.save();
-            (0, events_1.publishEvent)({
-                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
-                domain: req.userDomain,
-                action: "documents.linked",
-                resourceType: "document",
-                resourceId: drhpId,
-                title: `Documents linked: ${drhpDoc.name} ↔ ${rhpDoc.name}`,
-                notifyWorkspace: true,
-            }).catch(console.error);
-            res.json({ message: "Linked successfully", drhpDocument: drhpDoc, rhpDocument: rhpDoc });
+            // Publish event for the linking (wrapped in try-catch to prevent errors from breaking the flow)
+            try {
+                await (0, events_1.publishEvent)({
+                    actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                    domain: req.userDomain,
+                    action: "documents.linked",
+                    resourceType: "document",
+                    resourceId: drhpId,
+                    title: `Documents linked for comparison: ${drhpDoc.name} ↔ ${rhpDoc.name}`,
+                    notifyWorkspace: true,
+                });
+            }
+            catch (eventError) {
+                // Log but don't fail the request - documents are already linked
+                console.error("Error publishing event for document linking:", eventError);
+            }
+            res.json({
+                message: "Documents linked successfully for comparison",
+                drhpDocument: {
+                    id: drhpDoc.id,
+                    name: drhpDoc.name,
+                    type: drhpDoc.type
+                },
+                rhpDocument: {
+                    id: rhpDoc.id,
+                    name: rhpDoc.name,
+                    type: rhpDoc.type
+                }
+            });
         }
         catch (error) {
-            res.status(500).json({ error: "Failed to link" });
+            console.error("Error linking documents for compare:", error);
+            res.status(500).json({ error: "Failed to link documents" });
         }
     },
     async unlinkForCompare(req, res) {
+        var _a, _b, _c;
         try {
             const { id } = req.params;
             const currentWorkspace = req.currentWorkspace || req.userDomain;
-            const document = await Document_1.Document.findOne({ id, domain: req.userDomain, workspaceId: currentWorkspace });
-            if (!document)
-                return res.status(404).json({ error: "Not found" });
+            const document = await Document_1.Document.findOne({
+                id,
+                domain: req.userDomain,
+                workspaceId: currentWorkspace,
+            });
+            if (!document) {
+                return res.status(404).json({ error: "Document not found" });
+            }
+            let linkedDocument = null;
+            // Unlink based on document type
             if (document.type === "DRHP" && document.relatedRhpId) {
-                await Document_1.Document.updateOne({ id: document.relatedRhpId }, { $unset: { relatedDrhpId: 1 } });
+                linkedDocument = await Document_1.Document.findOne({
+                    id: document.relatedRhpId,
+                    domain: req.userDomain,
+                    workspaceId: currentWorkspace,
+                });
+                if (linkedDocument) {
+                    linkedDocument.relatedDrhpId = undefined;
+                    await linkedDocument.save();
+                }
                 document.relatedRhpId = undefined;
+                await document.save();
             }
             else if (document.type === "RHP" && document.relatedDrhpId) {
-                await Document_1.Document.updateOne({ id: document.relatedDrhpId }, { $unset: { relatedRhpId: 1 } });
+                linkedDocument = await Document_1.Document.findOne({
+                    id: document.relatedDrhpId,
+                    domain: req.userDomain,
+                    workspaceId: currentWorkspace,
+                });
+                if (linkedDocument) {
+                    linkedDocument.relatedRhpId = undefined;
+                    await linkedDocument.save();
+                }
                 document.relatedDrhpId = undefined;
+                await document.save();
             }
-            await document.save();
-            res.json({ message: "Unlinked successfully" });
+            // Publish event for the unlinking (wrapped in try-catch to prevent errors from breaking the flow)
+            try {
+                await (0, events_1.publishEvent)({
+                    actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                    domain: req.userDomain,
+                    action: "documents.unlinked",
+                    resourceType: "document",
+                    resourceId: document.id,
+                    title: `Documents unlinked: ${document.name}`,
+                    notifyWorkspace: true,
+                });
+            }
+            catch (eventError) {
+                // Log but don't fail the request - documents are already unlinked
+                console.error("Error publishing event for document unlinking:", eventError);
+            }
+            res.json({
+                message: "Documents unlinked successfully",
+                unlinkedDocument: {
+                    id: document.id,
+                    name: document.name,
+                    type: document.type
+                }
+            });
         }
         catch (error) {
-            res.status(500).json({ error: "Failed to unlink" });
+            console.error("Error unlinking documents:", error);
+            res.status(500).json({ error: "Failed to unlink documents" });
         }
     },
 };

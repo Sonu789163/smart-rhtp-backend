@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { User } from "../models/User";
 
-interface AuthRequest extends Request {
+export interface AuthRequest extends Request {
   user?: any;
   userDomain?: string;
   currentWorkspace?: string;
@@ -59,6 +59,9 @@ export const authMiddleware = async (
       // Fallback to user's domain if no workspace header
       req.currentWorkspace = user.domain;
     }
+
+    // Set userDomain for consistency
+    req.userDomain = user.domainId;
 
     next();
   } catch (error) {

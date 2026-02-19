@@ -1,11 +1,49 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.chatController = void 0;
 const Chat_1 = require("../models/Chat");
 const Document_1 = require("../models/Document");
 const User_1 = require("../models/User");
 const index_1 = require("../index");
+const axios_1 = __importDefault(require("axios"));
 exports.chatController = {
+    async sendMessage(req, res) {
+        try {
+            const { message, namespace, documentType, history, sessionId } = req.body;
+            if (!message || !namespace || !documentType) {
+                return res.status(400).json({ error: "Missing required fields (message, namespace, documentType)" });
+            }
+            const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+            console.log(`Forwarding chat query to Python: ${namespace}`);
+            const payload = {
+                message,
+                namespace,
+                document_type: documentType,
+                history: history || [],
+                authorization: req.headers.authorization,
+                sessionId: sessionId
+            };
+            const pythonResponse = await axios_1.default.post(`${pythonApiUrl}/chats/query`, payload, {
+                timeout: 60000 // Chat might take a while
+            });
+            if (pythonResponse.data && pythonResponse.data.status === "success") {
+                return res.json({
+                    response: pythonResponse.data.output,
+                    job_id: pythonResponse.data.job_id,
+                    usage: pythonResponse.data.usage,
+                    duration: pythonResponse.data.duration
+                });
+            }
+            res.status(500).json({ error: "Failed to get response from Chat AI", details: pythonResponse.data });
+        }
+        catch (error) {
+            console.error("Error in sendMessage:", error.message);
+            res.status(500).json({ error: "Chat processing failed", message: error.message });
+        }
+    },
     async getAll(req, res) {
         var _a, _b;
         try {

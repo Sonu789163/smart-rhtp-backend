@@ -27,12 +27,13 @@ const domainSchema = new mongoose.Schema({
     default: "active",
     index: true,
   },
-  investor_match_only: { type: Boolean, default: true },
-  valuation_matching: { type: Boolean, default: true },
-  adverse_finding: { type: Boolean, default: true },
+  investor_match_only: { type: Boolean, default: false },
+  valuation_matching: { type: Boolean, default: false },
+  adverse_finding: { type: Boolean, default: false },
   target_investors: { type: [String], default: [] },
   custom_summary_sop: { type: String, default: "" },
-  validator_checklist: { type: [String], default: [] }
+  validator_checklist: { type: [String], default: [] },
+  custom_validator_prompt: { type: String, default: "" }
 });
 
 // Generate domainId before saving
@@ -55,24 +56,3 @@ domainSchema.index({ domainName: 1, status: 1 });
 domainSchema.index({ domainId: 1, status: 1 });
 
 export const Domain = mongoose.model("Domain", domainSchema);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
