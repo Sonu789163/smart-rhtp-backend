@@ -31,7 +31,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "express-rate-limit": "^7.5.1",
-    "form-data": "^4.0.3",
+    "form-data": "^4.0.5",
     "formdata": "^0.10.4",
     "gridfs-stream": "^1.1.1",
     "helmet": "^7.2.0",

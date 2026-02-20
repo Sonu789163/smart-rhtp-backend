@@ -27,13 +27,41 @@ const domainSchema = new mongoose.Schema({
     default: "active",
     index: true,
   },
+
+  // ── Feature Toggles ──
   investor_match_only: { type: Boolean, default: false },
   valuation_matching: { type: Boolean, default: false },
   adverse_finding: { type: Boolean, default: false },
-  target_investors: { type: [String], default: [] },
-  custom_summary_sop: { type: String, default: "" },
+  target_investors: { type: [String], default: [] },          // Admin-input: investor names to prioritize
+  matched_investors: { type: mongoose.Schema.Types.Mixed, default: [] },  // Pipeline output: matched investor results
+
+  // ── SOP Storage (populated by Onboarding Agent) ──
+  sop_text: { type: String, default: "" },               // Original uploaded SOP text
+  custom_summary_sop: { type: String, default: "" },     // Structured/processed SOP template
+
+  // ── Onboarding Agent Outputs ──
+  // Task 1: Custom subqueries (refactored from default 10)
+  custom_subqueries: { type: [String], default: [] },
+  subquery_analysis: { type: mongoose.Schema.Types.Mixed, default: {} },
+  subquery_changes_log: { type: [String], default: [] },
+
+  // Task 2: Customized Agent 3 prompt (Summarization Agent)
+  agent3_prompt: { type: String, default: "" },
+
+  // Task 3: Customized Agent 4 prompt (Validation Agent)
+  agent4_prompt: { type: String, default: "" },
+  custom_validator_prompt: { type: String, default: "" }, // backward compat
+
+  // Legacy fields
   validator_checklist: { type: [String], default: [] },
-  custom_validator_prompt: { type: String, default: "" }
+
+  // ── Onboarding Metadata ──
+  onboarding_status: {
+    type: String,
+    enum: ["pending", "processing", "completed", "completed_no_sop", "failed"],
+    default: "pending",
+  },
+  last_onboarded: { type: Date, default: null },
 });
 
 // Generate domainId before saving
