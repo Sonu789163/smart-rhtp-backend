@@ -34,7 +34,6 @@ export const domainController = {
                 adverse_finding: domain.adverse_finding,
                 target_investors: domain.target_investors || [],
                 // SOP data
-                custom_summary_sop: domain.custom_summary_sop || "",
                 has_sop: !!(domain.sop_text),
                 // Onboarding status
                 onboarding_status: domain.onboarding_status || "pending",
@@ -87,9 +86,7 @@ export const domainController = {
                 domain.target_investors = updates.target_investors;
             }
 
-            if (updates.custom_summary_sop !== undefined) {
-                domain.custom_summary_sop = updates.custom_summary_sop;
-            }
+
 
             if (Array.isArray(updates.validator_checklist)) {
                 domain.validator_checklist = updates.validator_checklist;
@@ -107,7 +104,6 @@ export const domainController = {
                     valuation_matching: domain.valuation_matching,
                     adverse_finding: domain.adverse_finding,
                     target_investors: domain.target_investors,
-                    custom_summary_sop: domain.custom_summary_sop,
                     validator_checklist: domain.validator_checklist
                 }
             });
@@ -237,14 +233,14 @@ export const domainController = {
 
         } catch (error: any) {
             console.error("Error in onboarding setup proxy:", error?.response?.data || error.message);
-            
+
             // Update status to failed
             const domainId = req.userDomain;
             if (domainId) {
                 await Domain.updateOne(
                     { domainId },
                     { $set: { onboarding_status: "failed", updatedAt: new Date() } }
-                ).catch(() => {});
+                ).catch(() => { });
             }
 
             res.status(500).json({
@@ -323,13 +319,13 @@ export const domainController = {
 
         } catch (error: any) {
             console.error("Error in re-onboarding proxy:", error?.response?.data || error.message);
-            
+
             const domainId = req.userDomain;
             if (domainId) {
                 await Domain.updateOne(
                     { domainId },
                     { $set: { onboarding_status: "failed", updatedAt: new Date() } }
-                ).catch(() => {});
+                ).catch(() => { });
             }
 
             res.status(500).json({

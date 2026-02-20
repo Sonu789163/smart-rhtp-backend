@@ -1665,7 +1665,6 @@ export const documentController = {
             domainId: rhpDoc.domainId || userWithDomain.domainId,
             workspaceId: rhpDoc.workspaceId || workspaceId,
             // Multi-tenant configuration injection
-            custom_summary_sop: domainConfig?.custom_summary_sop || "",
             target_investors: domainConfig?.target_investors || [],
             investor_match_only: domainConfig?.investor_match_only ?? true,
             valuation_matching: domainConfig?.valuation_matching ?? true,

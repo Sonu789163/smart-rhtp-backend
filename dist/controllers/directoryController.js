@@ -91,7 +91,7 @@ exports.directoryController = {
         }
     },
     async create(req, res) {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
+        var _a, _b, _c, _d, _e;
         try {
             const { name, parentId } = req.body || {};
             if (!name || String(name).trim() === "") {
@@ -150,7 +150,7 @@ exports.directoryController = {
                 domain: actualDomain, // Use actual user domain, not workspace slug - backward compatibility
                 domainId: userWithDomain.domainId, // Link to Domain schema
                 workspaceId: currentWorkspace,
-                ownerUserId: (_e = (_d = (_c = req.user) === null || _c === void 0 ? void 0 : _c._id) === null || _d === void 0 ? void 0 : _d.toString) === null || _e === void 0 ? void 0 : _e.call(_d),
+                // ownerUserId: req.user?._id?.toString?.(), // Removed for global workspace access
                 documentCount: 0,
                 drhpCount: 0,
                 rhpCount: 0,
@@ -158,7 +158,7 @@ exports.directoryController = {
             const dir = new Directory_1.Directory(payload);
             await dir.save();
             await (0, events_1.publishEvent)({
-                actorUserId: (_h = (_g = (_f = req.user) === null || _f === void 0 ? void 0 : _f._id) === null || _g === void 0 ? void 0 : _g.toString) === null || _h === void 0 ? void 0 : _h.call(_g),
+                actorUserId: (_e = (_d = (_c = req.user) === null || _c === void 0 ? void 0 : _c._id) === null || _d === void 0 ? void 0 : _d.toString) === null || _e === void 0 ? void 0 : _e.call(_d),
                 domain: req.userDomain,
                 action: "directory.created",
                 resourceType: "directory",
@@ -283,14 +283,16 @@ exports.directoryController = {
                 console.log(`[listChildren DEBUG] Total directories to check: ${allDirs.length}, Total SharePermissions: ${allUserShares.length}`);
             }
             const visibleDirs = await Promise.all(allDirs.map(async (dir) => {
-                var _a, _b, _c, _d;
-                // Shared directories are always visible to the user they're shared with
-                if (dir.isShared && dir.sharedWithUserId === userId) {
-                    console.log(`[listChildren] ✓ Showing shared directory: ${dir.name} (${dir.id}) to user ${userId}`);
+                var _a, _b;
+                // GLOBAL ACCESS WITHIN WORKSPACE:
+                // If the directory belongs to the current workspace, everyone in the workspace can see it.
+                // This implements the "global use" requirement.
+                if (dir.workspaceId === currentWorkspace) {
                     return dir;
                 }
-                // Same-domain admins can see all directories
-                if (isSameDomainAdmin)
+                // For shared directories (from other workspaces/domains):
+                // Shared directories are always visible to the user they're shared with
+                if (dir.isShared && dir.sharedWithUserId === userId)
                     return dir;
                 // For cross-domain users (both admin and regular), they can ONLY see directories with SharePermission
                 // Cross-domain users won't own directories in other domains, so skip owner check for them
@@ -380,49 +382,8 @@ exports.directoryController = {
                     // No permission - don't show this directory
                     return null;
                 }
-                // For same-domain users (non-admin), check ownership and shares
-                // Shared directories are always visible to the user they're shared with
-                if (dir.isShared && dir.sharedWithUserId === userId)
-                    return dir;
-                if (dir.ownerUserId === userId)
-                    return dir;
-                // Check user-scoped share permission (by user ID or email)
-                const userEmail = (_d = (_c = req.user) === null || _c === void 0 ? void 0 : _c.email) === null || _d === void 0 ? void 0 : _d.toLowerCase();
-                if (userId) {
-                    const userShare = await SharePermission_1.SharePermission.findOne({
-                        domain,
-                        resourceType: "directory",
-                        resourceId: dir.id,
-                        scope: "user",
-                        principalId: userId,
-                    });
-                    if (userShare)
-                        return dir;
-                }
-                // Also check by email for cross-domain sharing
-                if (userEmail) {
-                    const emailShare = await SharePermission_1.SharePermission.findOne({
-                        domain,
-                        resourceType: "directory",
-                        resourceId: dir.id,
-                        scope: "user",
-                        invitedEmail: userEmail,
-                    });
-                    if (emailShare)
-                        return dir;
-                }
-                // Check workspace-scoped share permission
-                const wsShare = await SharePermission_1.SharePermission.findOne({
-                    domain,
-                    resourceType: "directory",
-                    resourceId: dir.id,
-                    scope: "workspace",
-                    principalId: currentWorkspace,
-                });
-                if (wsShare)
-                    return dir;
-                // No permission - don't show this directory
-                return null;
+                // Default fallback (should be covered by the first check for workspaceId)
+                return dir;
             }));
             // Filter out null values (directories without permission)
             let dirs = visibleDirs.filter((d) => d !== null);

@@ -225,9 +225,14 @@ function requireDirectoryPermission(paramKey, needed) {
 // Check permission based on document id provided in request body
 function requireBodyDocumentPermission(bodyKey, needed) {
     return async function (req, res, next) {
-        var _a;
+        var _a, _b;
         try {
-            const documentId = (_a = req.body) === null || _a === void 0 ? void 0 : _a[bodyKey];
+            let documentId = (_a = req.body) === null || _a === void 0 ? void 0 : _a[bodyKey];
+            // Fallback for document ID aliases (e.g. drhpDocumentId, rhpDocumentId)
+            if (!documentId && bodyKey.endsWith('Id')) {
+                const aliasKey = bodyKey.replace('Id', 'DocumentId');
+                documentId = (_b = req.body) === null || _b === void 0 ? void 0 : _b[aliasKey];
+            }
             if (!documentId)
                 return res.status(400).json({ error: `Missing ${bodyKey}` });
             const role = await getUserRoleForDocument(req, documentId);

@@ -97,6 +97,10 @@ exports.app.use((0, cors_1.default)({
 // Handle preflight requests explicitly
 exports.app.options('*', (0, cors_1.default)());
 exports.app.use(express_1.default.json());
+exports.app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
 exports.app.use(passport_1.default.initialize());
 // Security middleware - configure helmet to work with CORS
 exports.app.use((0, helmet_1.default)({

@@ -224,7 +224,12 @@ exports.documentController = {
                     }
                 }
             }
-            // Only check ownership for same-domain users
+            // GLOBAL ACCESS WITHIN WORKSPACE:
+            // If the directory belongs to the current workspace, everyone in the workspace has access.
+            if (directory.workspaceId === req.currentWorkspace) {
+                return true;
+            }
+            // Only check ownership for same-domain users (fallback)
             if (!isCrossDomainUser && directory.ownerUserId === userId)
                 return true;
             // Check user-scoped share permission (this is the key for cross-domain users)
@@ -658,6 +663,10 @@ exports.documentController = {
             // Add domain and workspace to document data
             docData.domain = actualDomain; // Use actual user domain, not workspace slug
             docData.workspaceId = currentWorkspace;
+            // Ensure global access - remove user-specific fields if present in body
+            delete docData.userId;
+            delete docData.ownerUserId;
+            delete docData.microsoftId;
             // Check duplicate by namespace within workspace
             const existing = await Document_1.Document.findOne({
                 workspaceId: currentWorkspace,
@@ -867,6 +876,25 @@ exports.documentController = {
                         },
                     });
                 }
+            }
+            // Delete vectors from Pinecone
+            try {
+                const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+                // Ensure pythonApiUrl doesn't have trailing slash
+                const baseUrl = pythonApiUrl.endsWith("/") ? pythonApiUrl.slice(0, -1) : pythonApiUrl;
+                console.log(`Deleting vectors for ${document.namespace || document.name} from Python API`);
+                await axios_1.default.delete(`${baseUrl}/jobs/document`, {
+                    params: {
+                        namespace: document.namespace || document.name,
+                        doc_type: document.type
+                    },
+                    timeout: 10000
+                });
+                console.log("Vectors deleted successfully");
+            }
+            catch (err) {
+                console.error("Failed to delete vectors:", err.message || err);
+                // Don't block deletion if vector deletion fails
             }
             // Publish delete event for the primary document
             await (0, events_1.publishEvent)({
@@ -1081,9 +1109,9 @@ exports.documentController = {
             // --- INTEGRATION: CALL PYTHON API INSTEAD OF N8N ---
             const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
             try {
-                const fileUrl = await this.getPresignedUrl(fileKey);
-                console.log(`Sending document to Python API: ${pythonApiUrl} /jobs/document`);
-                const pythonResponse = await axios_1.default.post(`${pythonApiUrl} /jobs/document`, {
+                const fileUrl = await exports.documentController.getPresignedUrl(fileKey);
+                console.log(`Sending document to Python API: ${pythonApiUrl}/jobs/document`); // Fixed URL space
+                const pythonResponse = await axios_1.default.post(`${pythonApiUrl}/jobs/document`, {
                     file_url: fileUrl,
                     file_type: "pdf",
                     metadata: {
@@ -1110,6 +1138,26 @@ exports.documentController = {
             }
             catch (pythonErr) {
                 console.error("Failed to call Python Ingestion API:", pythonErr.message);
+                // ROLLBACK: Delete document if ingestion fails
+                try {
+                    await Document_1.Document.deleteOne({ _id: document._id });
+                    // Also delete from R2? It was uploaded before creating document...
+                    if (fileKey) {
+                        const deleteCommand = new client_s3_1.DeleteObjectCommand({
+                            Bucket: r2_1.R2_BUCKET,
+                            Key: fileKey,
+                        });
+                        await r2_1.r2Client.send(deleteCommand);
+                    }
+                    console.log(`Rolled back document ${document.id} due to ingestion failure.`);
+                }
+                catch (rollbackErr) {
+                    console.error("Rollback failed:", rollbackErr);
+                }
+                return res.status(500).json({
+                    error: "Document ingestion failed. Please try again.",
+                    details: pythonErr.message
+                });
             }
             res.status(201).json({ message: "File uploaded successfully", document });
         }
@@ -1501,7 +1549,7 @@ exports.documentController = {
             const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
             let finalStatus = "processing";
             try {
-                const fileUrl = await this.getPresignedUrl(fileKey);
+                const fileUrl = await exports.documentController.getPresignedUrl(fileKey);
                 console.log(`Sending RHP document to Python API: ${pythonApiUrl}/jobs/document`);
                 const pythonResponse = await axios_1.default.post(`${pythonApiUrl}/jobs/document`, {
                     file_url: fileUrl,
@@ -1515,7 +1563,6 @@ exports.documentController = {
                         domainId: rhpDoc.domainId || userWithDomain.domainId,
                         workspaceId: rhpDoc.workspaceId || workspaceId,
                         // Multi-tenant configuration injection
-                        custom_summary_sop: (domainConfig === null || domainConfig === void 0 ? void 0 : domainConfig.custom_summary_sop) || "",
                         target_investors: (domainConfig === null || domainConfig === void 0 ? void 0 : domainConfig.target_investors) || [],
                         investor_match_only: (_a = domainConfig === null || domainConfig === void 0 ? void 0 : domainConfig.investor_match_only) !== null && _a !== void 0 ? _a : true,
                         valuation_matching: (_b = domainConfig === null || domainConfig === void 0 ? void 0 : domainConfig.valuation_matching) !== null && _b !== void 0 ? _b : true,
@@ -1535,6 +1582,27 @@ exports.documentController = {
             }
             catch (pythonErr) {
                 console.error("Failed to call Python Ingestion API for RHP:", pythonErr.message);
+                // ROLLBACK: Delete RHP document if ingestion fails
+                try {
+                    await Document_1.Document.deleteOne({ _id: rhpDoc._id });
+                    // Also delete from R2
+                    const deleteCommand = new client_s3_1.DeleteObjectCommand({
+                        Bucket: r2_1.R2_BUCKET,
+                        Key: fileKey,
+                    });
+                    await r2_1.r2Client.send(deleteCommand);
+                    // Also UNLINK from DRHP
+                    drhp.relatedRhpId = undefined;
+                    await drhp.save();
+                    console.log(`Rolled back RHP ${rhpDoc.id} due to ingestion failure.`);
+                }
+                catch (rollbackErr) {
+                    console.error("Rollback failed:", rollbackErr);
+                }
+                return res.status(500).json({
+                    error: "RHP ingestion failed. Please try again.",
+                    details: pythonErr.message
+                });
             }
             // Emit upload status (use the actual status from n8n or default to processing)
             const jobId = rhpDoc.id;

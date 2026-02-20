@@ -52,9 +52,15 @@ exports.reportController = {
     async compareDocuments(req, res) {
         var _a, _b, _c, _d;
         try {
-            const { drhpId, rhpId, drhpNamespace, rhpNamespace, sessionId, prompt } = req.body;
+            const { drhpNamespace, rhpNamespace, sessionId, prompt } = req.body;
+            // Handle both drhpId and drhpDocumentId (compat with reportN8nService)
+            const drhpId = req.body.drhpId || req.body.drhpDocumentId;
+            const rhpId = req.body.rhpId || req.body.rhpDocumentId;
             if (!drhpId || !rhpId || !drhpNamespace || !rhpNamespace) {
-                return res.status(400).json({ error: "Missing required fields for comparison" });
+                return res.status(400).json({
+                    error: "Missing required fields for comparison",
+                    received: { drhpId: !!drhpId, rhpId: !!rhpId, drhpNamespace: !!drhpNamespace, rhpNamespace: !!rhpNamespace }
+                });
             }
             const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
             const domain = req.userDomain || ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain);
@@ -271,7 +277,10 @@ exports.reportController = {
     async create(req, res) {
         var _a;
         try {
-            const { title, content, drhpId, rhpId, drhpNamespace, rhpNamespace, domainId: bodyDomainId, domain: bodyDomain } = req.body;
+            const { title, content, drhpNamespace, rhpNamespace, domainId: bodyDomainId, domain: bodyDomain } = req.body;
+            // Handle both drhpId and drhpDocumentId
+            const drhpId = req.body.drhpId || req.body.drhpDocumentId;
+            const rhpId = req.body.rhpId || req.body.rhpDocumentId;
             if (!title ||
                 !content ||
                 !drhpId ||
@@ -281,12 +290,12 @@ exports.reportController = {
                 return res.status(400).json({
                     message: "Missing required fields",
                     required: {
-                        title,
-                        content,
-                        drhpId,
-                        rhpId,
-                        drhpNamespace,
-                        rhpNamespace,
+                        title: !!title,
+                        content: !!content,
+                        drhpId: !!drhpId,
+                        rhpId: !!rhpId,
+                        drhpNamespace: !!drhpNamespace,
+                        rhpNamespace: !!rhpNamespace,
                     },
                 });
             }
