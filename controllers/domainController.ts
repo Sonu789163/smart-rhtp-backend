@@ -33,16 +33,16 @@ export const domainController = {
                 valuation_matching: domain.valuation_matching,
                 adverse_finding: domain.adverse_finding,
                 target_investors: domain.target_investors || [],
-                // SOP data
-                has_sop: !!(domain.sop_text),
+                // SOP & Prompts data
+                sop_text: domain.sop_text || "",
+                agent3_prompt: domain.agent3_prompt || "",
+                agent4_prompt: domain.agent4_prompt || "",
                 // Onboarding status
                 onboarding_status: domain.onboarding_status || "pending",
                 last_onboarded: domain.last_onboarded,
-                // Custom configs summary (don't send full prompts to frontend)
+                // Custom configs summary
                 has_custom_subqueries: !!(domain.custom_subqueries && domain.custom_subqueries.length > 0),
                 custom_subqueries_count: (domain.custom_subqueries || []).length,
-                has_agent3_prompt: !!(domain.agent3_prompt),
-                has_agent4_prompt: !!(domain.agent4_prompt),
                 // Legacy
                 validator_checklist: domain.validator_checklist || [],
             });
@@ -81,30 +81,69 @@ export const domainController = {
             if (updates.valuation_matching !== undefined) domain.valuation_matching = updates.valuation_matching;
             if (updates.adverse_finding !== undefined) domain.adverse_finding = updates.adverse_finding;
 
+            let triggerAIUpdate = false;
+            // Update list fields if provided
+            if (updates.sop_text !== undefined && updates.sop_text !== domain.sop_text) {
+                domain.sop_text = updates.sop_text;
+                triggerAIUpdate = true;
+            }
+            if (updates.agent3_prompt !== undefined) domain.agent3_prompt = updates.agent3_prompt;
+            if (updates.agent4_prompt !== undefined) domain.agent4_prompt = updates.agent4_prompt;
+
             // Update lists if provided (replace entire list)
             if (Array.isArray(updates.target_investors)) {
                 domain.target_investors = updates.target_investors;
             }
 
-
-
             if (Array.isArray(updates.validator_checklist)) {
                 domain.validator_checklist = updates.validator_checklist;
+            }
+
+            // If SOP updated, trigger the Onboarding Agent again
+            if (triggerAIUpdate && domain.sop_text.trim()) {
+                console.log(`AI Update triggered due to SOP change for ${domainId}`);
+                domain.onboarding_status = "processing";
+
+                // Fire and forget (or handle response if you want to be more strict)
+                const forwardData = new FormData();
+                forwardData.append("domainId", domainId);
+                forwardData.append("sopText", domain.sop_text);
+                forwardData.append("config", JSON.stringify({
+                    toggles: {
+                        investor_match_only: domain.investor_match_only,
+                        valuation_matching: domain.valuation_matching,
+                        adverse_finding: domain.adverse_finding,
+                    },
+                    targetInvestors: domain.target_investors || [],
+                }));
+
+                axios.post(`${PYTHON_API_URL}/onboarding/re-onboard`, forwardData, {
+                    headers: forwardData.getHeaders(),
+                    timeout: 30000,
+                }).then(response => {
+                    console.log(`✅ Success: AI Re-onboarding started for ${domainId}`);
+                }).catch(err => {
+                    console.error(`❌ Error triggering AI Re-onboarding for ${domainId}:`, err.response?.data || err.message);
+                });
             }
 
             domain.updatedAt = new Date();
             await domain.save();
 
-            console.log(`✅ Domain config updated for ${domainId}`);
+            console.log(`✅ Domain config updated for ${domainId}${triggerAIUpdate ? " (AI background task started)" : ""}`);
 
             res.json({
-                message: "Configuration updated successfully",
+                message: triggerAIUpdate ? "Configuration updated and AI analysis started" : "Configuration updated successfully",
                 config: {
                     investor_match_only: domain.investor_match_only,
                     valuation_matching: domain.valuation_matching,
                     adverse_finding: domain.adverse_finding,
                     target_investors: domain.target_investors,
-                    validator_checklist: domain.validator_checklist
+                    sop_text: domain.sop_text,
+                    agent3_prompt: domain.agent3_prompt,
+                    agent4_prompt: domain.agent4_prompt,
+                    validator_checklist: domain.validator_checklist,
+                    onboarding_status: domain.onboarding_status
                 }
             });
         } catch (error) {
@@ -232,7 +271,9 @@ export const domainController = {
             });
 
         } catch (error: any) {
-            console.error("Error in onboarding setup proxy:", error?.response?.data || error.message);
+            const pythonError = error?.response?.data;
+            const statusCode = error?.response?.status;
+            console.error(`Error in onboarding setup proxy (Python returned ${statusCode}):`, JSON.stringify(pythonError, null, 2) || error.message);
 
             // Update status to failed
             const domainId = req.userDomain;
@@ -243,9 +284,9 @@ export const domainController = {
                 ).catch(() => { });
             }
 
-            res.status(500).json({
+            res.status(statusCode || 500).json({
                 error: "Failed to start onboarding",
-                details: error?.response?.data || error.message
+                details: pythonError || error.message
             });
         }
     },
