@@ -24,6 +24,8 @@ router.get("/admin", (0, auth_1.authorize)(["admin"]), chatController_1.chatCont
 router.get("/admin/stats", (0, auth_1.authorize)(["admin"]), chatController_1.chatController.getStats);
 // Get chat history for a document
 router.get("/document/:documentId", chatController_1.chatController.getByDocumentId);
+// Trigger AI response (Python service)
+router.post("/message", (0, rateLimitByWorkspace_1.rateLimitByWorkspace)("chat:message", 500, 24 * 60 * 60 * 1000), chatController_1.chatController.sendMessage);
 // Create new chat (rate limited)
 router.post("/", (0, rateLimitByWorkspace_1.rateLimitByWorkspace)("chat:create", 1000, 24 * 60 * 60 * 1000), chatController_1.chatController.create);
 // Add message to chat

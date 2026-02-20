@@ -49,6 +49,59 @@ const index_1 = require("../index");
 const events_1 = require("../lib/events");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.reportController = {
+    async compareDocuments(req, res) {
+        var _a, _b, _c, _d;
+        try {
+            const { drhpNamespace, rhpNamespace, sessionId, prompt } = req.body;
+            // Handle both drhpId and drhpDocumentId (compat with reportN8nService)
+            const drhpId = req.body.drhpId || req.body.drhpDocumentId;
+            const rhpId = req.body.rhpId || req.body.rhpDocumentId;
+            if (!drhpId || !rhpId || !drhpNamespace || !rhpNamespace) {
+                return res.status(400).json({
+                    error: "Missing required fields for comparison",
+                    received: { drhpId: !!drhpId, rhpId: !!rhpId, drhpNamespace: !!drhpNamespace, rhpNamespace: !!rhpNamespace }
+                });
+            }
+            const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+            const domain = req.userDomain || ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain);
+            // Get domainId
+            let domainId = (_b = req.user) === null || _b === void 0 ? void 0 : _b.domainId;
+            if (!domainId && ((_c = req.user) === null || _c === void 0 ? void 0 : _c._id)) {
+                const user = await User_1.User.findById(req.user._id).select("domainId").lean();
+                domainId = user === null || user === void 0 ? void 0 : user.domainId;
+            }
+            console.log(`Triggering Python Comparison: ${drhpNamespace} vs ${rhpNamespace}`);
+            const payload = {
+                drhpNamespace,
+                rhpNamespace,
+                drhpDocumentId: drhpId,
+                rhpDocumentId: rhpId,
+                sessionId: sessionId || Date.now().toString(),
+                domain: domain,
+                domainId: domainId,
+                authorization: req.headers.authorization,
+                metadata: {
+                    workspaceId: req.currentWorkspace || domain,
+                    triggeredBy: (_d = req.user) === null || _d === void 0 ? void 0 : _d._id
+                }
+            };
+            const pythonResponse = await axios_1.default.post(`${pythonApiUrl}/jobs/comparison`, payload, {
+                timeout: 30000
+            });
+            if (pythonResponse.data && pythonResponse.data.status === "accepted") {
+                return res.json({
+                    status: "processing",
+                    job_id: pythonResponse.data.job_id,
+                    message: "Comparison job started successfully"
+                });
+            }
+            res.status(500).json({ error: "Failed to start comparison job", details: pythonResponse.data });
+        }
+        catch (error) {
+            console.error("Error in compareDocuments:", error.message);
+            res.status(500).json({ error: "Comparison trigger failed", message: error.message });
+        }
+    },
     async getAll(req, res) {
         var _a, _b, _c, _d;
         try {
@@ -224,7 +277,10 @@ exports.reportController = {
     async create(req, res) {
         var _a;
         try {
-            const { title, content, drhpId, rhpId, drhpNamespace, rhpNamespace, domainId: bodyDomainId, domain: bodyDomain } = req.body;
+            const { title, content, drhpNamespace, rhpNamespace, domainId: bodyDomainId, domain: bodyDomain } = req.body;
+            // Handle both drhpId and drhpDocumentId
+            const drhpId = req.body.drhpId || req.body.drhpDocumentId;
+            const rhpId = req.body.rhpId || req.body.rhpDocumentId;
             if (!title ||
                 !content ||
                 !drhpId ||
@@ -234,12 +290,12 @@ exports.reportController = {
                 return res.status(400).json({
                     message: "Missing required fields",
                     required: {
-                        title,
-                        content,
-                        drhpId,
-                        rhpId,
-                        drhpNamespace,
-                        rhpNamespace,
+                        title: !!title,
+                        content: !!content,
+                        drhpId: !!drhpId,
+                        rhpId: !!rhpId,
+                        drhpNamespace: !!drhpNamespace,
+                        rhpNamespace: !!rhpNamespace,
                     },
                 });
             }

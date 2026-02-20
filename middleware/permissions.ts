@@ -111,7 +111,7 @@ async function getUserRoleForDocument(req: any, documentId: string): Promise<Rol
   if (doc.directoryId && req.currentWorkspace) {
     const { Directory } = await import("../models/Directory");
     const { SharePermission } = await import("../models/SharePermission");
-    
+
     // Check if there's a shared directory pointing to this document's directory
     const sharedDir = await Directory.findOne({
       workspaceId: req.currentWorkspace,
@@ -122,7 +122,7 @@ async function getUserRoleForDocument(req: any, documentId: string): Promise<Rol
     if (sharedDir) {
       const userId = req.user?._id?.toString?.();
       const userEmail = req.user?.email?.toLowerCase();
-      
+
       // Check if user is the recipient
       if (userId && sharedDir.sharedWithUserId === userId) {
         return "viewer"; // Shared directories typically give viewer access
@@ -198,7 +198,14 @@ export function requireDirectoryPermission(paramKey: string, needed: Exclude<Rol
 export function requireBodyDocumentPermission(bodyKey: string, needed: Exclude<Role, "none">) {
   return async function (req: any, res: any, next: any) {
     try {
-      const documentId = req.body?.[bodyKey];
+      let documentId = req.body?.[bodyKey];
+
+      // Fallback for document ID aliases (e.g. drhpDocumentId, rhpDocumentId)
+      if (!documentId && bodyKey.endsWith('Id')) {
+        const aliasKey = bodyKey.replace('Id', 'DocumentId');
+        documentId = req.body?.[aliasKey];
+      }
+
       if (!documentId) return res.status(400).json({ error: `Missing ${bodyKey}` });
       const role = await getUserRoleForDocument(req, documentId);
       if (roleRank(role) < roleRank(needed)) {

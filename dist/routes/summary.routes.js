@@ -72,6 +72,8 @@ router.get("/admin/metrics/count", async (req, res) => {
 });
 // Get summaries for a document
 router.get("/document/:documentId", summaryController_1.summaryController.getByDocumentId);
+// Trigger summary generation (Python service)
+router.post("/trigger", (0, rateLimitByWorkspace_1.rateLimitByWorkspace)("summary:trigger", 100, 24 * 60 * 60 * 1000), (0, permissions_1.requireBodyDocumentPermission)("documentId", "editor"), summaryController_1.summaryController.triggerSummary);
 // Create new summary (rate limited)
 router.post("/create", (0, rateLimitByWorkspace_1.rateLimitByWorkspace)("summary:create", 300, 24 * 60 * 60 * 1000), (0, permissions_1.requireBodyDocumentPermission)("documentId", "editor"), summaryController_1.summaryController.create);
 // Update summary

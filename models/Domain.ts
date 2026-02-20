@@ -27,12 +27,54 @@ const domainSchema = new mongoose.Schema({
     default: "active",
     index: true,
   },
-  investor_match_only: { type: Boolean, default: true },
-  valuation_matching: { type: Boolean, default: true },
-  adverse_finding: { type: Boolean, default: true },
-  target_investors: { type: [String], default: [] },
-  custom_summary_sop: { type: String, default: "" },
-  validator_checklist: { type: [String], default: [] }
+
+
+  // ── Feature Toggles ──
+  investor_match_only: { type: Boolean, default: false },
+  valuation_matching: { type: Boolean, default: false },
+  adverse_finding: { type: Boolean, default: false },
+  target_investors: {
+    type: [String], default: [
+      "Adheesh Kabra", "Shilpa Kabra", "Rishi Agarwal", "Aarth AIF", "Aarth AIF Growth Fund",
+      "Chintan Shah", "Sanjay Popatlal Jain", "Manoj Agrawal", "Rajasthan Global Securities Private Limited",
+      "Finavenue Capital Trust", "SB Opportunities Fund", "Smart Horizon Opportunity Fund",
+      "Nav Capital Vcc - Nav Capital Emerging", "Invicta Continuum Fund", "HOLANI VENTURE CAPITAL FUND - HOLANI 1. VENTURE CAPITAL FUND 1",
+      "MERU INVESTMENT FUND PCC- CELL 1", "Finavenue Growth Fund", "Anant Aggarwal",
+      "PACE COMMODITY BROKERS PRIVATE LIMITED", "Bharatbhai Prahaladbhai Patel", "ACCOR OPPORTUNITIES TRUST",
+      "V2K Hospitality Private Limited", "Mihir Jain", "Rajesh Kumar Jain", "Vineet Saboo",
+      "Prabhat Investment Services LLP", "Nikhil Shah", "Nevil Savjani", "Yogesh Jain", "Shivin Jain",
+      "Pushpa Kabra", "KIFS Dealer", "Jitendra Agrawal", "Komalay Investrade Private Limited",
+      "Viney Equity Market LLP", "Nitin Patel", "Pooja Kushal Patel", "Gitaben Patel", "Rishi Agarwal HUF",
+      "Sunil Singhania", "Mukul mahavir Agrawal", "Ashish Kacholia", "Lalit Dua", "Utsav shrivastav"
+    ]
+  },          // Admin-input: investor names to prioritize
+  matched_investors: { type: mongoose.Schema.Types.Mixed, default: [] },  // Pipeline output: matched investor results
+
+  // ── SOP Storage (populated by Onboarding Agent) ──
+  sop_text: { type: String, default: "" },               // Original uploaded SOP text for onboarding reference
+
+  // ── Onboarding Agent Outputs ──
+  // Task 1: Custom subqueries (refactored from default 10)
+  custom_subqueries: { type: [String], default: [] },
+  subquery_analysis: { type: mongoose.Schema.Types.Mixed, default: {} },
+  subquery_changes_log: { type: [String], default: [] },
+
+  // Task 2: Customized Agent 3 prompt (Summarization Agent)
+  agent3_prompt: { type: String, default: "" },
+
+  // Task 3: Customized Agent 4 prompt (Validation Agent)
+  agent4_prompt: { type: String, default: "" },
+
+  // Legacy fields
+  validator_checklist: { type: [String], default: [] },
+
+  // ── Onboarding Metadata ──
+  onboarding_status: {
+    type: String,
+    enum: ["pending", "processing", "completed", "completed_no_sop", "failed"],
+    default: "pending",
+  },
+  last_onboarded: { type: Date, default: null },
 });
 
 // Generate domainId before saving
@@ -55,24 +97,3 @@ domainSchema.index({ domainName: 1, status: 1 });
 domainSchema.index({ domainId: 1, status: 1 });
 
 export const Domain = mongoose.model("Domain", domainSchema);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

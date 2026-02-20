@@ -49,6 +49,51 @@ const index_1 = require("../index");
 const events_1 = require("../lib/events");
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 exports.summaryController = {
+    async triggerSummary(req, res) {
+        var _a, _b, _c;
+        try {
+            const { documentId, namespace, docType, metadata } = req.body;
+            if (!namespace || !docType) {
+                return res.status(400).json({ error: "Missing required fields (namespace, docType)" });
+            }
+            const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+            const domain = req.userDomain || ((_a = req.user) === null || _a === void 0 ? void 0 : _a.domain);
+            // Get domainId
+            let domainId = (_b = req.user) === null || _b === void 0 ? void 0 : _b.domainId;
+            if (!domainId && ((_c = req.user) === null || _c === void 0 ? void 0 : _c._id)) {
+                const user = await User_1.User.findById(req.user._id).select("domainId").lean();
+                domainId = user === null || user === void 0 ? void 0 : user.domainId;
+            }
+            console.log(`Triggering Python Summary for: ${namespace} (${docType})`);
+            const payload = {
+                namespace,
+                doc_type: docType.toLowerCase(),
+                metadata: {
+                    ...metadata,
+                    documentId,
+                    domain,
+                    domainId,
+                    workspaceId: req.currentWorkspace || domain,
+                    authorization: req.headers.authorization
+                }
+            };
+            const pythonResponse = await axios_1.default.post(`${pythonApiUrl}/jobs/summary`, payload, {
+                timeout: 30000
+            });
+            if (pythonResponse.data && pythonResponse.data.status === "accepted") {
+                return res.json({
+                    status: "processing",
+                    job_id: pythonResponse.data.job_id,
+                    message: "Summary generation job started"
+                });
+            }
+            res.status(500).json({ error: "Failed to start summary job", details: pythonResponse.data });
+        }
+        catch (error) {
+            console.error("Error in triggerSummary:", error.message);
+            res.status(500).json({ error: "Summary trigger failed", message: error.message });
+        }
+    },
     async getAll(req, res) {
         var _a, _b, _c, _d;
         try {
@@ -347,17 +392,68 @@ exports.summaryController = {
     async downloadDocx(req, res) {
         try {
             const { id } = req.params;
-            const summary = await Summary_1.Summary.findOne({ id });
+            // LOG START
+            try {
+                await (0, promises_1.writeFile)(path_1.default.join(process.cwd(), "debug_error.log"), `Starting downloadDocx for ID: ${id}\n`, { flag: "a" });
+            }
+            catch (_a) { }
+            const summary = await Summary_1.Summary.findOne({
+                $or: [
+                    { id: id },
+                    { id: Number(id) }
+                ]
+            });
             if (!summary || !summary.content) {
+                try {
+                    await (0, promises_1.writeFile)(path_1.default.join(process.cwd(), "debug_error.log"), `Summary not found or empty content for ID: ${id} (Tried Number: ${Number(id)})\n`, { flag: "a" });
+                }
+                catch (_b) { }
                 return res.status(404).json({ error: "Summary not found" });
             }
-            // Write HTML to a temp file
+            // Log success found
+            try {
+                await (0, promises_1.writeFile)(path_1.default.join(process.cwd(), "debug_error.log"), `Found summary: ${summary.id} (Type: ${typeof summary.id})\n`, { flag: "a" });
+            }
+            catch (_c) { }
             const tmpDir = os_1.default.tmpdir();
-            const htmlPath = path_1.default.join(tmpDir, `summary_${id}.html`);
             const docxPath = path_1.default.join(tmpDir, `summary_${id}.docx`);
-            await (0, promises_1.writeFile)(htmlPath, summary.content, "utf8");
-            // Convert HTML to DOCX using Pandoc
-            await execAsync(`pandoc "${htmlPath}" -o "${docxPath}"`);
+            // Clean content: Replace literal \n with real newlines, remove \r, \t, etc.
+            // This matches the frontend 'cleanSummaryContent' logic
+            const cleanContent = (summary.content || "")
+                .replace(/\\n/g, "\n")
+                .replace(/\\r/g, "")
+                .replace(/\\t/g, "\t")
+                .replace(/\\"/g, '"');
+            // Detect format (default to HTML for backward compatibility)
+            let format = summary.format || "html";
+            // If format is "html" (legacy default) but content looks like markdown, switch to markdown
+            if (format === "html" && (cleanContent.includes("**") || cleanContent.includes("##") || cleanContent.includes("---"))) {
+                format = "markdown";
+            }
+            let inputPath;
+            let pandocCommand;
+            if (format === "markdown") {
+                inputPath = path_1.default.join(tmpDir, `summary_${id}.md`);
+                await (0, promises_1.writeFile)(inputPath, cleanContent, "utf8");
+                pandocCommand = `pandoc "${inputPath}" -f markdown -t docx -o "${docxPath}"`;
+            }
+            else {
+                inputPath = path_1.default.join(tmpDir, `summary_${id}.html`);
+                await (0, promises_1.writeFile)(inputPath, cleanContent, "utf8");
+                pandocCommand = `pandoc "${inputPath}" -f html -t docx -o "${docxPath}"`;
+            }
+            // Log paths
+            try {
+                await (0, promises_1.writeFile)(path_1.default.join(process.cwd(), "debug_error.log"), `Paths: Input=${inputPath}, Output=${docxPath}, Cmd=${pandocCommand}\n`, { flag: "a" });
+            }
+            catch (_d) { }
+            // Convert to DOCX using Pandoc
+            const { stdout, stderr } = await execAsync(pandocCommand);
+            // Log success
+            try {
+                await (0, promises_1.writeFile)(path_1.default.join(process.cwd(), "debug_error.log"), `Pandoc Success. Stdout: ${stdout}, Stderr: ${stderr}\n`, { flag: "a" });
+            }
+            catch (_e) { }
             // Send DOCX file
             res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
             res.setHeader("Content-Disposition", `attachment; filename="${(summary.title || "summary").replace(/[^a-z0-9]/gi, "_")}.docx"`);
@@ -365,9 +461,19 @@ exports.summaryController = {
                 // Clean up temp files
                 if (err) {
                     console.error("Error sending file:", err);
+                    try {
+                        await (0, promises_1.writeFile)(path_1.default.join(process.cwd(), "debug_error.log"), `Error sending file: ${err.message}\n`, { flag: "a" });
+                    }
+                    catch (_a) { }
+                }
+                else {
+                    try {
+                        await (0, promises_1.writeFile)(path_1.default.join(process.cwd(), "debug_error.log"), `File sent successfully.\n`, { flag: "a" });
+                    }
+                    catch (_b) { }
                 }
                 try {
-                    await (0, promises_1.unlink)(htmlPath);
+                    await (0, promises_1.unlink)(inputPath);
                     await (0, promises_1.unlink)(docxPath);
                 }
                 catch (cleanupError) {
@@ -377,7 +483,14 @@ exports.summaryController = {
         }
         catch (error) {
             console.error("Error generating DOCX with Pandoc:", error);
-            res.status(500).json({ error: "Failed to generate DOCX" });
+            // Debug logging
+            try {
+                await (0, promises_1.writeFile)(path_1.default.join(process.cwd(), "debug_error.log"), `Error: ${JSON.stringify(error, Object.getOwnPropertyNames(error))}\nStack: ${error.stack}\n`, { flag: "a" });
+            }
+            catch (e) {
+                console.error("Could not write debug log", e);
+            }
+            res.status(500).json({ error: "Failed to generate DOCX", details: error.message });
         }
     },
     async update(req, res) {

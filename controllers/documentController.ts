@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { Document } from "../models/Document";
 import { SharePermission } from "../models/SharePermission";
 import { Directory } from "../models/Directory";
+import { Domain } from "../models/Domain";
 import { User } from "../models/User";
 import axios from "axios";
 import FormData from "form-data";
@@ -207,7 +208,13 @@ export const documentController = {
         }
       }
 
-      // Only check ownership for same-domain users
+      // GLOBAL ACCESS WITHIN WORKSPACE:
+      // If the directory belongs to the current workspace, everyone in the workspace has access.
+      if (directory.workspaceId === req.currentWorkspace) {
+        return true;
+      }
+
+      // Only check ownership for same-domain users (fallback)
       if (!isCrossDomainUser && directory.ownerUserId === userId) return true;
 
       // Check user-scoped share permission (this is the key for cross-domain users)
@@ -682,6 +689,11 @@ export const documentController = {
       docData.domain = actualDomain; // Use actual user domain, not workspace slug
       docData.workspaceId = currentWorkspace;
 
+      // Ensure global access - remove user-specific fields if present in body
+      delete docData.userId;
+      delete docData.ownerUserId;
+      delete docData.microsoftId;
+
       // Check duplicate by namespace within workspace
       const existing = await Document.findOne({
         workspaceId: currentWorkspace,
@@ -756,8 +768,6 @@ export const documentController = {
     }
   },
 
-  // restore disabled while trash functionality is off
-
   async delete(req: AuthRequest, res: Response) {
     try {
       // Workspace is required
@@ -791,13 +801,13 @@ export const documentController = {
 
       // Build list of document ids to cascade delete against (only the document being deleted)
       const docIdsToDelete: string[] = [document.id];
-      let linkedRhpId: string | null = null;
-      let linkedRhpDoc: any = null;
+      // let linkedRhpId: string | null = null;
+      // let linkedRhpDoc: any = null;
 
       // If deleting a DRHP, unlink from RHP (don't delete RHP)
       if (document.type === "DRHP" && document.relatedRhpId) {
-        linkedRhpId = document.relatedRhpId;
-        linkedRhpDoc = await Document.findOne({ id: linkedRhpId, domain: req.userDomain, workspaceId: currentWorkspace });
+        const linkedRhpId = document.relatedRhpId;
+        const linkedRhpDoc = await Document.findOne({ id: linkedRhpId, domain: req.userDomain, workspaceId: currentWorkspace });
         if (linkedRhpDoc) {
           // Unlink RHP from DRHP
           linkedRhpDoc.relatedDrhpId = undefined as any;
@@ -805,7 +815,6 @@ export const documentController = {
           // Don't delete RHP - just unlink
         }
       }
-
       // If deleting an RHP, unlink from DRHP (don't delete DRHP)
       if (document.type === "RHP") {
         const drhpDoc = await Document.findOne({ relatedRhpId: document.id, domain: req.userDomain, workspaceId: currentWorkspace });
@@ -911,6 +920,27 @@ export const documentController = {
         }
       }
 
+      // Delete vectors from Pinecone
+      try {
+        const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
+        // Ensure pythonApiUrl doesn't have trailing slash
+        const baseUrl = pythonApiUrl.endsWith("/") ? pythonApiUrl.slice(0, -1) : pythonApiUrl;
+
+        console.log(`Deleting vectors for ${document.namespace || document.name} from Python API`);
+
+        await axios.delete(`${baseUrl}/jobs/document`, {
+          params: {
+            namespace: document.namespace || document.name,
+            doc_type: document.type
+          },
+          timeout: 10000
+        });
+        console.log("Vectors deleted successfully");
+      } catch (err: any) {
+        console.error("Failed to delete vectors:", err.message || err);
+        // Don't block deletion if vector deletion fails
+      }
+
       // Publish delete event for the primary document
       await publishEvent({
         actorUserId: (req as any).user?._id?.toString?.(),
@@ -918,7 +948,7 @@ export const documentController = {
         action: "document.deleted",
         resourceType: "document",
         resourceId: document.id,
-        title: `Document deleted: ${document.name}`,
+        title: `Document deleted: ${document.name} `,
         notifyWorkspace: true,
       });
 
@@ -951,7 +981,7 @@ export const documentController = {
       }
 
       // Determine document type from request body, default to DRHP
-      const documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
+      let documentType = req.body.type || "DRHP"; // Accept type from frontend, default to DRHP
 
       // NEW: Directory is now required for document upload (directory-first approach)
       const directoryId = req.body.directoryId === "root" ? null : req.body.directoryId;
@@ -1019,6 +1049,92 @@ export const documentController = {
       } else if (user?._id) {
         docData.userId = user._id.toString();
       }
+
+      // --- VALIDATION START ---
+      // Download file to validate content (DRHP vs RHP)
+      let isContentValid = false;
+      let rejectionReason = "Document validation failed. Unable to verify document content.";
+
+      try {
+        const getObjectCommand = new GetObjectCommand({
+          Bucket: R2_BUCKET,
+          Key: fileKey,
+        });
+        const s3Response = await r2Client.send(getObjectCommand);
+
+        const chunks: Uint8Array[] = [];
+        // @ts-ignore
+        for await (const chunk of s3Response.Body) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+
+        // Parse PDF
+        // @ts-ignore
+        let pdfParse;
+        try {
+          pdfParse = require("pdf-parse");
+          if (typeof pdfParse !== 'function' && pdfParse.default) pdfParse = pdfParse.default;
+        } catch (e) {
+          console.error("Failed to require pdf-parse:", e);
+        }
+
+        if (typeof pdfParse === 'function') {
+          const data = await pdfParse(buffer, { max: 1 });
+          const normalizedText = (data.text || "").toLowerCase();
+
+          let detectedType: string | null = null;
+          if (normalizedText.includes("draft red herring prospectus")) {
+            detectedType = "DRHP";
+          } else if (normalizedText.includes("red herring prospectus")) {
+            // If strictly red herring and NOT draft
+            if (!normalizedText.includes("draft red herring prospectus")) {
+              detectedType = "RHP";
+            }
+          }
+
+          if (!detectedType) {
+            // Invalid document
+            console.warn(`❌ Invalid document content. Rejecting.`);
+            const targetType = req.body.type || "DRHP";
+            rejectionReason = `Invalid ${targetType} document.`;
+            isContentValid = false;
+          } else {
+            // Strict validation: Content must match requested type
+            if (req.body.type && req.body.type !== detectedType) {
+              console.warn(`❌ Type mismatch. Requested: ${req.body.type}, Detected: ${detectedType}`);
+              rejectionReason = `Document type mismatch. You are trying to upload a ${detectedType} as ${req.body.type}. Please upload the correct document.`;
+              isContentValid = false;
+            } else {
+              // Apply detected type
+              documentType = detectedType;
+              docData.type = documentType;
+              isContentValid = true;
+              console.log(`✅ Document identified as ${documentType}`);
+            }
+          }
+        } else {
+          rejectionReason = "Server configuration error: PDF parser not available.";
+        }
+      } catch (valError: any) {
+        console.error("Validation error:", valError);
+        rejectionReason = "Validation error: " + (valError.message || "Unknown error");
+      }
+
+      if (!isContentValid) {
+        // Delete from R2
+        try {
+          const deleteCommand = new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: fileKey,
+          });
+          await r2Client.send(deleteCommand);
+        } catch (e) { }
+
+        return res.status(400).json({ error: rejectionReason });
+      }
+      // --- VALIDATION END ---
+
       const document = new Document(docData);
       await document.save();
 
@@ -1047,7 +1163,7 @@ export const documentController = {
         action: "document.uploaded",
         resourceType: "document",
         resourceId: document.id,
-        title: `Document uploaded: ${document.name}`,
+        title: `Document uploaded: ${document.name} `,
         notifyWorkspace: true,
       });
 
@@ -1055,11 +1171,11 @@ export const documentController = {
       const pythonApiUrl = process.env.PYTHON_API_URL || "http://localhost:8000";
 
       try {
-        const fileUrl = await this.getPresignedUrl(fileKey);
+        const fileUrl = await documentController.getPresignedUrl(fileKey);
 
-        console.log(`Sending document to Python API: ${pythonApiUrl}/jobs/document`);
+        console.log(`Sending document to Python API: ${pythonApiUrl}/jobs/document`); // Fixed URL space
 
-        const pythonResponse = await axios.post(`${pythonApiUrl}/jobs/document`, {
+        const pythonResponse = await axios.post(`${pythonApiUrl}/jobs/document`, { // Fixed URL space
           file_url: fileUrl,
           file_type: "pdf",
           metadata: {
@@ -1086,6 +1202,27 @@ export const documentController = {
         }
       } catch (pythonErr: any) {
         console.error("Failed to call Python Ingestion API:", pythonErr.message);
+
+        // ROLLBACK: Delete document if ingestion fails
+        try {
+          await Document.deleteOne({ _id: document._id });
+          // Also delete from R2? It was uploaded before creating document...
+          if (fileKey) {
+            const deleteCommand = new DeleteObjectCommand({
+              Bucket: R2_BUCKET,
+              Key: fileKey,
+            });
+            await r2Client.send(deleteCommand);
+          }
+          console.log(`Rolled back document ${document.id} due to ingestion failure.`);
+        } catch (rollbackErr) {
+          console.error("Rollback failed:", rollbackErr);
+        }
+
+        return res.status(500).json({
+          error: "Document ingestion failed. Please try again.",
+          details: pythonErr.message
+        });
       }
 
       res.status(201).json({ message: "File uploaded successfully", document });
@@ -1169,7 +1306,7 @@ export const documentController = {
       res.set({
         "Content-Type": "application/pdf",
         "Content-Disposition": `${inline ? "inline" : "attachment"
-          }; filename=\"${document.name}\"`,
+          }; filename =\"${document.name}\"`,
         "Cache-Control": "private, max-age=60",
       });
       const getObjectCommand = new GetObjectCommand({
@@ -1414,6 +1551,9 @@ export const documentController = {
         return res.status(400).json({ error: "User domainId not found. Please contact administrator." });
       }
 
+      // Fetch full domain config
+      const domainConfig = await Domain.findOne({ domainId: userWithDomain.domainId });
+
       const rhpDocData: any = {
         id: fileKey,
         fileKey: fileKey,
@@ -1435,6 +1575,69 @@ export const documentController = {
         rhpDocData.userId = user._id.toString();
       }
 
+      // --- VALIDATION START FOR RHP ---
+      let isContentValid = false;
+      let rejectionReason = "Document validation failed. Unable to verify document content.";
+
+      try {
+        const getObjectCommand = new GetObjectCommand({
+          Bucket: R2_BUCKET,
+          Key: fileKey,
+        });
+        const s3Response = await r2Client.send(getObjectCommand);
+
+        const chunks: Uint8Array[] = [];
+        // @ts-ignore
+        for await (const chunk of s3Response.Body) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+
+        // Parse PDF
+        // @ts-ignore
+        let pdfParse;
+        try {
+          pdfParse = require("pdf-parse");
+          if (typeof pdfParse !== 'function' && pdfParse.default) pdfParse = pdfParse.default;
+        } catch (e) {
+          console.error("Failed to require pdf-parse:", e);
+        }
+
+        if (typeof pdfParse === 'function') {
+          const data = await pdfParse(buffer, { max: 1 });
+          const normalizedText = (data.text || "").toLowerCase();
+
+          // Strict RHP check: Must contain "red herring prospectus" and NOT "draft"
+          if (!normalizedText.includes("red herring prospectus") || normalizedText.includes("draft red herring prospectus")) {
+            console.warn(`❌ Invalid RHP content. Rejecting.`);
+            rejectionReason = "Invalid RHP document.";
+            isContentValid = false;
+          } else {
+            isContentValid = true;
+            console.log(`✅ RHP Document content validated.`);
+          }
+        } else {
+          rejectionReason = "Server configuration error: PDF parser not available.";
+        }
+      } catch (valError: any) {
+        console.error("Validation error in uploadRhp:", valError);
+        rejectionReason = "Validation error: " + (valError.message || "Unknown error");
+      }
+
+      if (!isContentValid) {
+        // Delete from R2
+        try {
+          const deleteCommand = new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: fileKey,
+          });
+          await r2Client.send(deleteCommand);
+        } catch (e) { }
+
+        return res.status(400).json({ error: rejectionReason });
+      }
+      // --- VALIDATION END ---
+
       const rhpDoc = new Document(rhpDocData);
       await rhpDoc.save();
 
@@ -1446,7 +1649,7 @@ export const documentController = {
       let finalStatus = "processing";
 
       try {
-        const fileUrl = await this.getPresignedUrl(fileKey);
+        const fileUrl = await documentController.getPresignedUrl(fileKey);
 
         console.log(`Sending RHP document to Python API: ${pythonApiUrl}/jobs/document`);
 
@@ -1460,7 +1663,12 @@ export const documentController = {
             relatedDrhpId: drhp.id,
             domain: rhpDoc.domain || user.domain,
             domainId: rhpDoc.domainId || userWithDomain.domainId,
-            workspaceId: rhpDoc.workspaceId || workspaceId
+            workspaceId: rhpDoc.workspaceId || workspaceId,
+            // Multi-tenant configuration injection
+            target_investors: domainConfig?.target_investors || [],
+            investor_match_only: domainConfig?.investor_match_only ?? true,
+            valuation_matching: domainConfig?.valuation_matching ?? true,
+            adverse_finding: domainConfig?.adverse_finding ?? true
           }
         }, {
           timeout: 60000
@@ -1476,6 +1684,30 @@ export const documentController = {
         }
       } catch (pythonErr: any) {
         console.error("Failed to call Python Ingestion API for RHP:", pythonErr.message);
+
+        // ROLLBACK: Delete RHP document if ingestion fails
+        try {
+          await Document.deleteOne({ _id: rhpDoc._id });
+          // Also delete from R2
+          const deleteCommand = new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: fileKey,
+          });
+          await r2Client.send(deleteCommand);
+
+          // Also UNLINK from DRHP
+          drhp.relatedRhpId = undefined as any;
+          await drhp.save();
+
+          console.log(`Rolled back RHP ${rhpDoc.id} due to ingestion failure.`);
+        } catch (rollbackErr) {
+          console.error("Rollback failed:", rollbackErr);
+        }
+
+        return res.status(500).json({
+          error: "RHP ingestion failed. Please try again.",
+          details: pythonErr.message
+        });
       }
 
       // Emit upload status (use the actual status from n8n or default to processing)

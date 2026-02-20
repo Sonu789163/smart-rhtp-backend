@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.io = void 0;
+exports.io = exports.app = void 0;
 const express_1 = __importDefault(require("express"));
 const mongoose_1 = __importDefault(require("mongoose"));
 const cors_1 = __importDefault(require("cors"));
@@ -25,16 +25,17 @@ const workspace_routes_1 = __importDefault(require("./routes/workspace.routes"))
 const workspaceRequest_routes_1 = __importDefault(require("./routes/workspaceRequest.routes"));
 const newsCrawl_routes_1 = __importDefault(require("./routes/newsCrawl.routes"));
 const newsArticle_routes_1 = __importDefault(require("./routes/newsArticle.routes"));
+const domain_routes_1 = __importDefault(require("./routes/domain.routes"));
 const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
 const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const emailService_1 = require("./services/emailService");
 dotenv_1.default.config();
-const app = (0, express_1.default)();
+exports.app = (0, express_1.default)();
 // Trust proxy for Render deployment
-app.set('trust proxy', 1);
-const server = http_1.default.createServer(app);
+exports.app.set('trust proxy', 1);
+const server = http_1.default.createServer(exports.app);
 const io = new socket_io_1.Server(server, {
     cors: {
         origin: function (origin, callback) {
@@ -68,7 +69,7 @@ const allowedOrigins = [
     "http://localhost:8080",
     "http://localhost:3000",
 ];
-app.use((0, cors_1.default)({
+exports.app.use((0, cors_1.default)({
     origin: function (origin, callback) {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin)
@@ -94,11 +95,15 @@ app.use((0, cors_1.default)({
     optionsSuccessStatus: 204,
 }));
 // Handle preflight requests explicitly
-app.options('*', (0, cors_1.default)());
-app.use(express_1.default.json());
-app.use(passport_1.default.initialize());
+exports.app.options('*', (0, cors_1.default)());
+exports.app.use(express_1.default.json());
+exports.app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
+exports.app.use(passport_1.default.initialize());
 // Security middleware - configure helmet to work with CORS
-app.use((0, helmet_1.default)({
+exports.app.use((0, helmet_1.default)({
     crossOriginResourcePolicy: { policy: "cross-origin" },
     crossOriginEmbedderPolicy: false,
 }));
@@ -137,32 +142,34 @@ const writeLimiter = (0, express_rate_limit_1.default)({
     },
 });
 // Apply read limiter to all routes
-app.use(readLimiter);
+exports.app.use(readLimiter);
 // Apply write limiter to all routes
-app.use(writeLimiter);
+exports.app.use(writeLimiter);
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI;
 if (!MONGODB_URI) {
     throw new Error("MONGODB_URI is not set");
 }
-mongoose_1.default
-    .connect(MONGODB_URI, {
-    serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
-    socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
-    connectTimeoutMS: 10000, // Give up initial connection after 10s
-    retryWrites: true,
-    retryReads: true,
-})
-    .then(async () => {
-    console.log("Connected to MongoDB");
-    // Test SMTP connection on startup (non-blocking)
-    (0, emailService_1.testSmtpConnection)().catch((err) => {
-        console.error("SMTP test error:", err);
+if (process.env.NODE_ENV !== 'test') {
+    mongoose_1.default
+        .connect(MONGODB_URI, {
+        serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+        socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+        connectTimeoutMS: 10000, // Give up initial connection after 10s
+        retryWrites: true,
+        retryReads: true,
+    })
+        .then(async () => {
+        console.log("Connected to MongoDB");
+        // Test SMTP connection on startup (non-blocking)
+        (0, emailService_1.testSmtpConnection)().catch((err) => {
+            console.error("SMTP test error:", err);
+        });
+    })
+        .catch((error) => {
+        console.error("MongoDB connection error:", error);
     });
-})
-    .catch((error) => {
-    console.error("MongoDB connection error:", error);
-});
+}
 // Handle MongoDB connection errors after initial connect
 mongoose_1.default.connection.on('error', (err) => {
     console.error('MongoDB connection error:', err);
@@ -174,24 +181,25 @@ mongoose_1.default.connection.on('reconnected', () => {
     console.log('MongoDB reconnected');
 });
 // Routes
-app.use("/api/auth", auth_routes_1.default);
-app.use("/api/documents", document_routes_1.default);
-app.use("/api/chats", chat_routes_1.default);
-app.use("/api/summaries", summary_routes_1.default);
-app.use("/api/reports", report_routes_1.default);
-app.use("/api/users", user_routes_1.default);
-app.use("/api/workspace-invitations", workspaceInvitation_routes_1.default);
-app.use("/api/invitation", publicInvitation_routes_1.default);
-app.use("/api/directories", directory_routes_1.default);
+exports.app.use("/api/auth", auth_routes_1.default);
+exports.app.use("/api/documents", document_routes_1.default);
+exports.app.use("/api/chats", chat_routes_1.default);
+exports.app.use("/api/summaries", summary_routes_1.default);
+exports.app.use("/api/reports", report_routes_1.default);
+exports.app.use("/api/users", user_routes_1.default);
+exports.app.use("/api/workspace-invitations", workspaceInvitation_routes_1.default);
+exports.app.use("/api/invitation", publicInvitation_routes_1.default);
+exports.app.use("/api/directories", directory_routes_1.default);
 // app.use("/api/trash", trashRoutes); // disabled for now
-app.use("/api/shares", share_routes_1.default);
-app.use("/api/notifications", notification_routes_1.default);
-app.use("/api/workspaces", workspace_routes_1.default);
-app.use("/api/workspace-requests", workspaceRequest_routes_1.default);
-app.use("/api/news-crawl", newsCrawl_routes_1.default);
-app.use("/api/news-articles", newsArticle_routes_1.default);
+exports.app.use("/api/shares", share_routes_1.default);
+exports.app.use("/api/notifications", notification_routes_1.default);
+exports.app.use("/api/workspaces", workspace_routes_1.default);
+exports.app.use("/api/workspace-requests", workspaceRequest_routes_1.default);
+exports.app.use("/api/news-crawl", newsCrawl_routes_1.default);
+exports.app.use("/api/news-articles", newsArticle_routes_1.default);
+exports.app.use("/api/domain", domain_routes_1.default);
 // Health check endpoint
-app.get("/health", (req, res) => {
+exports.app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });
 });
 // Global error handlers to prevent server crashes
@@ -207,7 +215,9 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('SIGPIPE', () => {
     console.log('SIGPIPE received, ignoring...');
 });
-server.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+    server.listen(PORT, () => {
+        console.log(`Server is running on port ${PORT}`);
+    });
+}
 // Allow only your frontend domain

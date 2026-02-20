@@ -23,7 +23,7 @@ function toSlug(input: string): string {
 }
 
 export const workspaceController = {
-  // Check if admin user needs to create workspace (first-login check)
+  // Check if admin user needs to create workspace AND/OR complete onboarding (first-login check)
   async checkFirstLogin(req: AuthRequest, res: Response) {
     try {
       const user = req.user;
@@ -31,7 +31,7 @@ export const workspaceController = {
 
       // Only admins can create workspaces
       if (user.role !== "admin") {
-        return res.json({ needsWorkspace: false, isAdmin: false, isNewDomain: false });
+        return res.json({ needsWorkspace: false, isAdmin: false, isNewDomain: false, needsOnboarding: false });
       }
 
       const domain = req.userDomain || user.domain;
@@ -59,10 +59,33 @@ export const workspaceController = {
       // Show modal only for new domain admin on first login (no workspaces in domain AND user has no workspace access)
       const needsWorkspace = isNewDomain && !hasWorkspace;
 
+      // Check if domain onboarding is still pending (admin should complete onboarding setup)
+      let needsOnboarding = false;
+      try {
+        const { Domain } = await import("../models/Domain");
+        const domainRecord = await Domain.findOne({
+          $or: [
+            { domainId: user.domainId },
+            { domainName: domain }
+          ]
+        });
+        if (domainRecord) {
+          const onboardingStatus = domainRecord.onboarding_status || "pending";
+          // Needs onboarding if status is pending or failed
+          needsOnboarding = onboardingStatus === "pending" || onboardingStatus === "failed";
+        } else {
+          // No domain record found — definitely needs onboarding
+          needsOnboarding = true;
+        }
+      } catch (err) {
+        console.error("Error checking onboarding status:", err);
+      }
+
       return res.json({
         needsWorkspace,
         isAdmin: user.role === "admin",
         isNewDomain,
+        needsOnboarding,
       });
     } catch (error) {
       console.error("Check first login error:", error);

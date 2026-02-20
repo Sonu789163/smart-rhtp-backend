@@ -23,6 +23,8 @@ router.get("/", reportController_1.reportController.getAll);
 router.get("/admin", reportController_1.reportController.getAllAdmin);
 // Get single report
 router.get("/:id", (0, permissions_1.requireReportPermission)("id", "viewer"), reportController_1.reportController.getById);
+// Trigger document comparison (Python service)
+router.post("/compare", (0, rateLimitByWorkspace_1.rateLimitByWorkspace)("report:compare", 50, 24 * 60 * 60 * 1000), (0, permissions_1.requireBodyDocumentPermission)("drhpId", "editor"), reportController_1.reportController.compareDocuments);
 // Create new report (rate limited)
 router.post("/create-report", (0, rateLimitByWorkspace_1.rateLimitByWorkspace)("report:create", 100, 24 * 60 * 60 * 1000), 
 // Need at least editor on DRHP to create a report
