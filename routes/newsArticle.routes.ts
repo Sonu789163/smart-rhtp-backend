@@ -22,4 +22,7 @@ router.get('/:id', newsArticleController.getArticleById);
 // GET articles by company
 router.get('/company/:company', newsArticleController.getArticlesByCompany);
 
+// DELETE article by ID
+router.delete('/:id', newsArticleController.deleteArticle);
+
 export default router;

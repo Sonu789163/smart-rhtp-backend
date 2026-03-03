@@ -32,7 +32,9 @@ export const domainController = {
                 investor_match_only: domain.investor_match_only,
                 valuation_matching: domain.valuation_matching,
                 adverse_finding: domain.adverse_finding,
+                news_monitor_enabled: domain.news_monitor_enabled,
                 target_investors: domain.target_investors || [],
+                monitored_companies: domain.monitored_companies || [],
                 // SOP & Prompts data
                 sop_text: domain.sop_text || "",
                 agent3_prompt: domain.agent3_prompt || "",
@@ -80,6 +82,7 @@ export const domainController = {
             if (updates.investor_match_only !== undefined) domain.investor_match_only = updates.investor_match_only;
             if (updates.valuation_matching !== undefined) domain.valuation_matching = updates.valuation_matching;
             if (updates.adverse_finding !== undefined) domain.adverse_finding = updates.adverse_finding;
+            if (updates.news_monitor_enabled !== undefined) domain.news_monitor_enabled = updates.news_monitor_enabled;
 
             let triggerAIUpdate = false;
             // Update list fields if provided
@@ -93,6 +96,10 @@ export const domainController = {
             // Update lists if provided (replace entire list)
             if (Array.isArray(updates.target_investors)) {
                 domain.target_investors = updates.target_investors;
+            }
+
+            if (Array.isArray(updates.monitored_companies)) {
+                domain.monitored_companies = updates.monitored_companies;
             }
 
             if (Array.isArray(updates.validator_checklist)) {
@@ -113,8 +120,10 @@ export const domainController = {
                         investor_match_only: domain.investor_match_only,
                         valuation_matching: domain.valuation_matching,
                         adverse_finding: domain.adverse_finding,
+                        news_monitor_enabled: domain.news_monitor_enabled,
                     },
                     targetInvestors: domain.target_investors || [],
+                    monitoredCompanies: domain.monitored_companies || [],
                 }));
 
                 axios.post(`${PYTHON_API_URL}/onboarding/re-onboard`, forwardData, {
@@ -138,7 +147,9 @@ export const domainController = {
                     investor_match_only: domain.investor_match_only,
                     valuation_matching: domain.valuation_matching,
                     adverse_finding: domain.adverse_finding,
+                    news_monitor_enabled: domain.news_monitor_enabled,
                     target_investors: domain.target_investors,
+                    monitored_companies: domain.monitored_companies,
                     sop_text: domain.sop_text,
                     agent3_prompt: domain.agent3_prompt,
                     agent4_prompt: domain.agent4_prompt,
@@ -187,8 +198,10 @@ export const domainController = {
                     investor_match_only: domain.investor_match_only,
                     valuation_matching: domain.valuation_matching,
                     adverse_finding: domain.adverse_finding,
+                    news_monitor_enabled: domain.news_monitor_enabled,
                 },
                 target_investors: domain.target_investors || [],
+                monitored_companies: domain.monitored_companies || [],
             });
         } catch (error) {
             console.error("Error fetching onboarding status:", error);
@@ -228,8 +241,10 @@ export const domainController = {
                         investor_match_only: req.body.investor_match_only || false,
                         valuation_matching: req.body.valuation_matching || false,
                         adverse_finding: req.body.adverse_finding || false,
+                        news_monitor_enabled: req.body.news_monitor_enabled || false,
                     },
                     targetInvestors: req.body.target_investors || [],
+                    monitoredCompanies: req.body.monitored_companies || [],
                 };
                 forwardData.append("config", JSON.stringify(defaultConfig));
             }
@@ -323,8 +338,10 @@ export const domainController = {
                         investor_match_only: req.body.investor_match_only || false,
                         valuation_matching: req.body.valuation_matching || false,
                         adverse_finding: req.body.adverse_finding || false,
+                        news_monitor_enabled: req.body.news_monitor_enabled || false,
                     },
                     targetInvestors: req.body.target_investors || [],
+                    monitoredCompanies: req.body.monitored_companies || [],
                 };
                 forwardData.append("config", JSON.stringify(defaultConfig));
             }
@@ -375,4 +392,31 @@ export const domainController = {
             });
         }
     },
+
+    // Trigger instant news monitor crawl
+    async triggerInstantNewsCrawl(req: AuthRequest, res: Response) {
+        try {
+            const domainId = req.userDomain;
+            if (!domainId) {
+                return res.status(400).json({ error: "Domain context not found" });
+            }
+
+            console.log(`🚀 Manual trigger: News Monitor crawl for domain: ${domainId}`);
+
+            const response = await axios.post(`${PYTHON_API_URL}/news-monitor/trigger`, {
+                domainId: domainId
+            });
+
+            res.json({
+                message: "Instant news crawl triggered successfully",
+                pythonResponse: response.data
+            });
+        } catch (error: any) {
+            console.error("Error triggering manual news crawl:", error.response?.data || error.message);
+            res.status(500).json({
+                error: "Failed to trigger news crawl",
+                details: error.response?.data || error.message
+            });
+        }
+    }
 };

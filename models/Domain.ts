@@ -68,6 +68,10 @@ const domainSchema = new mongoose.Schema({
   // Legacy fields
   validator_checklist: { type: [String], default: [] },
 
+  // ── News Monitor Configuration ──
+  news_monitor_enabled: { type: Boolean, default: false },
+  monitored_companies: { type: [String], default: [] },
+
   // ── Onboarding Metadata ──
   onboarding_status: {
     type: String,

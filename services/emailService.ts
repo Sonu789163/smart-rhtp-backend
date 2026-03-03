@@ -53,22 +53,19 @@ const emailTemplates = {
           <div class="content">
             <h2>You're invited to join a workspace!</h2>
             <p>Hello,</p>
-            <p><strong>${
-              data.inviterName
-            }</strong> has invited you to join the <strong>${
-      data.workspaceName
-    }</strong> workspace.</p>
+            <p><strong>${data.inviterName
+      }</strong> has invited you to join the <strong>${data.workspaceName
+      }</strong> workspace.</p>
             
             <div class="workspace-info">
               <h3>Workspace Details:</h3>
               <p><strong>Name:</strong> ${data.workspaceName}</p>
               <p><strong>Domain:</strong> ${data.workspaceDomain}</p>
               <p><strong>Your Role:</strong> ${data.invitedRole}</p>
-              ${
-                data.message
-                  ? `<p><strong>Message:</strong> ${data.message}</p>`
-                  : ""
-              }
+              ${data.message
+        ? `<p><strong>Message:</strong> ${data.message}</p>`
+        : ""
+      }
             </div>
             
             <p>Click the button below to accept this invitation:</p>
@@ -76,9 +73,8 @@ const emailTemplates = {
               Accept Invitation
             </button>
             
-            <p><strong>Important:</strong> This invitation will expire on ${
-              data.expiresAt
-            }.</p>
+            <p><strong>Important:</strong> This invitation will expire on ${data.expiresAt
+      }.</p>
             
             <p><strong>What happens next:</strong></p>
             <ul>
@@ -91,9 +87,8 @@ const emailTemplates = {
             <a style="word-break: break-all; color: blue ; background: #f5f5f5; padding: 10px; border-radius: 3px;" href="${data.invitationUrl}">${data.invitationUrl}</a>
           </div>
           <div class="footer">
-            <p>This invitation was sent by ${data.inviterName} (${
-      data.workspaceDomain
-    })</p>
+            <p>This invitation was sent by ${data.inviterName} (${data.workspaceDomain
+      })</p>
             <p>If you didn't expect this invitation, you can safely ignore this email.</p>
           </div>
         </div>
@@ -105,9 +100,8 @@ const emailTemplates = {
       
       Hello,
       
-      ${data.inviterName} has invited you to join the ${
-      data.workspaceName
-    } workspace.
+      ${data.inviterName} has invited you to join the ${data.workspaceName
+      } workspace.
       
       Workspace Details:
       - Name: ${data.workspaceName}
@@ -323,6 +317,54 @@ const emailTemplates = {
       
       If you didn't expect this share, you can safely ignore this email.
     `,
+  }),
+  "system-alert": (data: any) => ({
+    html: `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>System Health Alert</title>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: #d32f2f; color: white; padding: 20px; text-align: center; }
+          .content { padding: 30px 20px; background: #f9f9f9; }
+          .service-item { border-bottom: 1px solid #eee; padding: 10px 0; }
+          .status-error { color: #d32f2f; font-weight: bold; }
+          .button { 
+            display: inline-block; 
+            background: #4B2A06; 
+            color: white; 
+            padding: 12px 30px; 
+            text-decoration: none; 
+            border-radius: 5px; 
+            margin: 20px 0;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>System Health Alert</h1>
+          </div>
+          <div class="content">
+            <h2 style="color: #d32f2f;">Critical Issue Detected</h2>
+            <p><strong>Detected At:</strong> ${data.timestamp}</p>
+            <p>The following services are experiencing issues:</p>
+            <ul>
+              ${data.failingServices.map((s: string) => `<li class="status-error">${s}</li>`).join('')}
+            </ul>
+            <div style="text-align: center;">
+              <a href="${data.dashboardUrl}" class="button" style="color: white;">View Admin Dashboard</a>
+            </div>
+            <p>Please check the logs in the admin dashboard for more details.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+    text: `System Health Alert!\n\nCritical Issue Detected at ${data.timestamp}.\nFailing Services: ${data.failingServices.join(', ')}.\n\nView details: ${data.dashboardUrl}`,
   }),
 };
 

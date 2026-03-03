@@ -40,4 +40,7 @@ router.post("/onboarding/setup", authMiddleware, upload.single("file"), domainCo
 // Re-onboarding with updated SOP (Admin only, proxies to Python AI Platform)
 router.post("/onboarding/re-onboard", authMiddleware, upload.single("file"), domainController.reOnboard);
 
+// Trigger instant news monitor crawl
+router.post("/trigger-news-crawl", authMiddleware, domainController.triggerInstantNewsCrawl);
+
 export default router;

@@ -20,11 +20,13 @@ import workspaceRequestRoutes from "./routes/workspaceRequest.routes";
 import newsCrawlRoutes from "./routes/newsCrawl.routes";
 import newsArticleRoutes from "./routes/newsArticle.routes";
 import domainRoutes from "./routes/domain.routes";
+import healthRoutes from "./routes/health.routes";
 import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { testSmtpConnection } from "./services/emailService";
+import { HealthService } from "./services/healthService";
 
 dotenv.config();
 
@@ -177,6 +179,12 @@ if (process.env.NODE_ENV !== 'test') {
       testSmtpConnection().catch((err) => {
         console.error("SMTP test error:", err);
       });
+      // Initial System Health Check (non-blocking)
+      HealthService.generateFullReport().then(report => {
+        console.log(`System Startup Health: ${report.overall_status.toUpperCase()}`);
+      }).catch(err => {
+        console.error("Startup Health Check Error:", err);
+      });
     })
     .catch((error) => {
       console.error("MongoDB connection error:", error);
@@ -214,6 +222,7 @@ app.use("/api/workspace-requests", workspaceRequestRoutes);
 app.use("/api/news-crawl", newsCrawlRoutes);
 app.use("/api/news-articles", newsArticleRoutes);
 app.use("/api/domain", domainRoutes);
+app.use("/api/health", healthRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {
