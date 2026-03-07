@@ -29,13 +29,10 @@ const sendDocumentToN8n = async (
   n8nName: string,
   documentType: string
 ) => {
-  const n8nWebhookUrl = documentType === "RHP"
-    ? `${process.env.N8N_WEBHOOK_URL}/upload/docs`
-    : `${process.env.N8N_WEBHOOK_URL}/upload/docs`;
+  const n8nWebhookUrl = `${process.env.N8N_WEBHOOK_URL}/upload/docs`;
 
   if (!process.env.N8N_WEBHOOK_URL) {
-    console.error("N8N_WEBHOOK_URL is not configured");
-    return;
+    throw new Error("N8N_WEBHOOK_URL is not configured");
   }
 
   const form = new FormData();
@@ -78,10 +75,15 @@ const sendDocumentToN8n = async (
         return "failed";
       }
     }
-  } catch (n8nErr) {
-    console.error("Failed to send file to n8n:", n8nErr);
+    return "processing";
+  } catch (n8nErr: any) {
+    console.error("Failed to send file to n8n:", n8nErr.message);
+    if (n8nErr.response) {
+      const errorMsg = n8nErr.response.data?.message || n8nErr.response.statusText || "N8N processing failed";
+      throw new Error(`N8N Error (${n8nErr.response.status}): ${errorMsg}`);
+    }
+    throw n8nErr;
   }
-  return "processing";
 };
 
 export const documentController = {
@@ -507,6 +509,11 @@ export const documentController = {
 
       // Build list of document ids to cascade delete against (this doc + paired doc if any)
       const docIdsToDelete: string[] = [document.id];
+      const docsToCleanVectors: any[] = [{
+        documentId: document.id,
+        name: document.name,
+        namespace: document.namespace
+      }];
 
       // If deleting a DRHP, also delete its related RHP document and its file
       if (document.type === "DRHP" && document.relatedRhpId) {
@@ -524,6 +531,11 @@ export const documentController = {
             }
           }
           docIdsToDelete.push(rhpDoc.id);
+          docsToCleanVectors.push({
+            documentId: rhpDoc.id,
+            name: rhpDoc.name,
+            namespace: rhpDoc.namespace
+          });
         }
       }
 
@@ -548,6 +560,18 @@ export const documentController = {
 
       // Finally, delete the documents themselves
       await Document.deleteMany({ id: { $in: docIdsToDelete }, domain: req.userDomain, workspaceId: currentWorkspace });
+
+      // Notify n8n/Pinecone to delete vectors (fire and forget)
+      if (process.env.N8N_WEBHOOK_URL) {
+        const pineconeWebhookUrl = `${process.env.N8N_WEBHOOK_URL}/delete/pincone-vectors`;
+
+        // Fire each deletion request in parallel without waiting
+        docsToCleanVectors.forEach(doc => {
+          axios.post(pineconeWebhookUrl, doc).catch(err => {
+            console.error(`Failed to notify Pinecone vector deletion for ${doc.documentId}:`, err.message);
+          });
+        });
+      }
 
       // Publish delete event for the primary document
       await publishEvent({
@@ -715,7 +739,23 @@ export const documentController = {
         // Send to n8n using helper
         // Use DRHP name if RHP, otherwise document name
         const n8nName = (documentType === "RHP" && relatedDrhp) ? relatedDrhp.name : document.name;
-        await sendDocumentToN8n(document, buffer, n8nName, documentType);
+        try {
+          await sendDocumentToN8n(document, buffer, n8nName, documentType);
+        } catch (n8nError: any) {
+          console.error("Caught N8N Handover Error:", n8nError.message);
+
+          // Cleanup: If N8N handover fails, we should not keep the document in a broken state
+          await r2Client.send(new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: fileKey,
+          }));
+          await Document.findByIdAndDelete(document._id);
+
+          return res.status(502).json({
+            error: "Failed to process document with N8N service",
+            details: n8nError.message
+          });
+        }
 
       } catch (validationErr: any) {
         console.error("Error validating document:", validationErr);
