@@ -30,8 +30,8 @@ const sendDocumentToN8n = async (
   documentType: string
 ) => {
   const n8nWebhookUrl = documentType === "RHP"
-    ? `${process.env.N8N_WEBHOOK_URL}/upload-rhp`
-    : `${process.env.N8N_WEBHOOK_URL}/upload-drhp`;
+    ? `${process.env.N8N_WEBHOOK_URL}/upload/docs`
+    : `${process.env.N8N_WEBHOOK_URL}/upload/docs`;
 
   if (!process.env.N8N_WEBHOOK_URL) {
     console.error("N8N_WEBHOOK_URL is not configured");
