@@ -32,21 +32,26 @@ export const domainController = {
                 investor_match_only: domain.investor_match_only,
                 valuation_matching: domain.valuation_matching,
                 adverse_finding: domain.adverse_finding,
-                news_monitor_enabled: domain.news_monitor_enabled,
-                target_investors: domain.target_investors || [],
+                news_monitor_enabled: domain.news_monitor_enabled || false,
                 monitored_companies: domain.monitored_companies || [],
+
+                target_investors: domain.target_investors || [],
+
                 // SOP & Prompts data
                 sop_text: domain.sop_text || "",
                 agent3_prompt: domain.agent3_prompt || "",
+                agent3_subqueries: domain.agent3_subqueries || [],
+                agent4_subqueries: domain.agent4_subqueries || [],
                 agent4_prompt: domain.agent4_prompt || "",
+                agent5_prompt: domain.agent5_prompt || "",
                 // Onboarding status
                 onboarding_status: domain.onboarding_status || "pending",
                 last_onboarded: domain.last_onboarded,
                 // Custom configs summary
-                has_custom_subqueries: !!(domain.custom_subqueries && domain.custom_subqueries.length > 0),
-                custom_subqueries_count: (domain.custom_subqueries || []).length,
+                has_custom_subqueries: !!(domain.agent4_subqueries && domain.agent4_subqueries.length > 0),
+                custom_subqueries_count: (domain.agent4_subqueries || []).length,
                 // Legacy
-                validator_checklist: domain.validator_checklist || [],
+
             });
         } catch (error) {
             console.error("Error fetching domain config:", error);
@@ -83,6 +88,14 @@ export const domainController = {
             if (updates.valuation_matching !== undefined) domain.valuation_matching = updates.valuation_matching;
             if (updates.adverse_finding !== undefined) domain.adverse_finding = updates.adverse_finding;
             if (updates.news_monitor_enabled !== undefined) domain.news_monitor_enabled = updates.news_monitor_enabled;
+            if (Array.isArray(updates.monitored_companies)) {
+                const flattened = updates.monitored_companies.reduce((acc: string[], curr: any) => {
+                    const items = String(curr).split(/[,\n;]+/).map(s => s.trim()).filter(s => s.length > 0);
+                    return [...acc, ...items];
+                }, []);
+                domain.monitored_companies = Array.from(new Set(flattened));
+            }
+
 
             let triggerAIUpdate = false;
             // Update list fields if provided
@@ -92,19 +105,30 @@ export const domainController = {
             }
             if (updates.agent3_prompt !== undefined) domain.agent3_prompt = updates.agent3_prompt;
             if (updates.agent4_prompt !== undefined) domain.agent4_prompt = updates.agent4_prompt;
+            if (updates.agent5_prompt !== undefined) domain.agent5_prompt = updates.agent5_prompt;
+            if (Array.isArray(updates.agent3_subqueries)) domain.agent3_subqueries = updates.agent3_subqueries;
+            if (Array.isArray(updates.agent4_subqueries)) domain.agent4_subqueries = updates.agent4_subqueries;
 
             // Update lists if provided (replace entire list)
-            if (Array.isArray(updates.target_investors)) {
-                domain.target_investors = updates.target_investors;
+            if (updates.target_investors !== undefined) {
+                if (Array.isArray(updates.target_investors)) {
+                    // Flatten and split any strings that contain delimiters within the array
+                    const flattened = updates.target_investors.reduce((acc: string[], curr: any) => {
+                        const items = String(curr).split(/[,\n;]+/).map(s => s.trim()).filter(s => s.length > 0);
+                        return [...acc, ...items];
+                    }, []);
+                    domain.target_investors = Array.from(new Set(flattened));
+                } else if (typeof updates.target_investors === 'string') {
+                    domain.target_investors = updates.target_investors
+                        .split(/[,\n;]+/)
+                        .map((s: string) => s.trim())
+                        .filter((s: string) => s.length > 0);
+                }
             }
 
-            if (Array.isArray(updates.monitored_companies)) {
-                domain.monitored_companies = updates.monitored_companies;
-            }
 
-            if (Array.isArray(updates.validator_checklist)) {
-                domain.validator_checklist = updates.validator_checklist;
-            }
+
+
 
             // If SOP updated, trigger the Onboarding Agent again
             if (triggerAIUpdate && domain.sop_text.trim()) {
@@ -120,10 +144,10 @@ export const domainController = {
                         investor_match_only: domain.investor_match_only,
                         valuation_matching: domain.valuation_matching,
                         adverse_finding: domain.adverse_finding,
-                        news_monitor_enabled: domain.news_monitor_enabled,
+
                     },
                     targetInvestors: domain.target_investors || [],
-                    monitoredCompanies: domain.monitored_companies || [],
+
                 }));
 
                 axios.post(`${PYTHON_API_URL}/onboarding/re-onboard`, forwardData, {
@@ -148,12 +172,16 @@ export const domainController = {
                     valuation_matching: domain.valuation_matching,
                     adverse_finding: domain.adverse_finding,
                     news_monitor_enabled: domain.news_monitor_enabled,
-                    target_investors: domain.target_investors,
                     monitored_companies: domain.monitored_companies,
+
+                    target_investors: domain.target_investors,
+
                     sop_text: domain.sop_text,
                     agent3_prompt: domain.agent3_prompt,
+                    agent4_subqueries: domain.agent4_subqueries,
+                    agent3_subqueries: domain.agent3_subqueries,
                     agent4_prompt: domain.agent4_prompt,
-                    validator_checklist: domain.validator_checklist,
+
                     onboarding_status: domain.onboarding_status
                 }
             });
@@ -189,8 +217,8 @@ export const domainController = {
                 onboarding_status: domain.onboarding_status || "pending",
                 last_onboarded: domain.last_onboarded,
                 has_sop: !!(domain.sop_text),
-                has_custom_subqueries: !!(domain.custom_subqueries && domain.custom_subqueries.length > 0),
-                custom_subqueries_count: (domain.custom_subqueries || []).length,
+                has_custom_subqueries: !!(domain.agent4_subqueries && domain.agent4_subqueries.length > 0),
+                custom_subqueries_count: (domain.agent4_subqueries || []).length,
                 has_agent3_prompt: !!(domain.agent3_prompt),
                 has_agent4_prompt: !!(domain.agent4_prompt),
                 subquery_analysis: domain.subquery_analysis || {},
@@ -198,10 +226,10 @@ export const domainController = {
                     investor_match_only: domain.investor_match_only,
                     valuation_matching: domain.valuation_matching,
                     adverse_finding: domain.adverse_finding,
-                    news_monitor_enabled: domain.news_monitor_enabled,
+
                 },
                 target_investors: domain.target_investors || [],
-                monitored_companies: domain.monitored_companies || [],
+
             });
         } catch (error) {
             console.error("Error fetching onboarding status:", error);
@@ -241,10 +269,10 @@ export const domainController = {
                         investor_match_only: req.body.investor_match_only || false,
                         valuation_matching: req.body.valuation_matching || false,
                         adverse_finding: req.body.adverse_finding || false,
-                        news_monitor_enabled: req.body.news_monitor_enabled || false,
+
                     },
                     targetInvestors: req.body.target_investors || [],
-                    monitoredCompanies: req.body.monitored_companies || [],
+
                 };
                 forwardData.append("config", JSON.stringify(defaultConfig));
             }
@@ -338,10 +366,10 @@ export const domainController = {
                         investor_match_only: req.body.investor_match_only || false,
                         valuation_matching: req.body.valuation_matching || false,
                         adverse_finding: req.body.adverse_finding || false,
-                        news_monitor_enabled: req.body.news_monitor_enabled || false,
+
                     },
                     targetInvestors: req.body.target_investors || [],
-                    monitoredCompanies: req.body.monitored_companies || [],
+
                 };
                 forwardData.append("config", JSON.stringify(defaultConfig));
             }

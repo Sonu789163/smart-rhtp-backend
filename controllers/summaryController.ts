@@ -493,7 +493,10 @@ export const summaryController = {
     try {
       const { id } = req.params;
       const query: any = {
-        id,
+        $or: [
+          { id: id },
+          { id: Number(id) }
+        ],
         domain: req.userDomain, // Ensure user can only update summaries from their domain
       };
 
@@ -521,26 +524,40 @@ export const summaryController = {
   async delete(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
+      const currentWorkspace = req.currentWorkspace || req.userDomain;
+
       const query: any = {
-        id,
-        domain: req.userDomain, // Ensure user can only delete summaries from their domain
+        $or: [
+          { id: id },
+          { id: Number(id) }
+        ],
       };
+
+      // Let workspace members delete summaries in the workspace
+      if (currentWorkspace) {
+        query.workspaceId = currentWorkspace;
+      } else {
+        query.domain = req.userDomain;
+      }
 
       // All workspace members can delete summaries in their workspace
       // No user-based filtering needed - workspace isolation is sufficient
 
       const summary = await Summary.findOneAndDelete(query).lean();
-      if (summary) {
-        await publishEvent({
-          actorUserId: req.user?._id?.toString?.(),
-          domain: req.userDomain!,
-          action: "summary.deleted",
-          resourceType: "summary",
-          resourceId: summary.id,
-          title: `Summary deleted: ${summary.title || summary.id}`,
-          notifyWorkspace: true,
-        });
+      if (!summary) {
+        return res.status(404).json({ message: "Summary not found or access denied" });
       }
+
+      await publishEvent({
+        actorUserId: req.user?._id?.toString?.(),
+        domain: req.userDomain!,
+        action: "summary.deleted",
+        resourceType: "summary",
+        resourceId: summary.id,
+        title: `Summary deleted: ${summary.title || summary.id}`,
+        notifyWorkspace: true,
+      });
+
       res.json({ message: "Summary deleted successfully" });
     } catch (error) {
       console.error("Error deleting summary:", error);
@@ -588,7 +605,12 @@ export const summaryController = {
   async downloadHtmlPdf(req: AuthRequest, res: Response) {
     try {
       const { id } = req.params;
-      const summary = await Summary.findOne({ id });
+      const summary = await Summary.findOne({
+        $or: [
+          { id: id },
+          { id: Number(id) }
+        ]
+      });
       if (!summary || !summary.content) {
         return res.status(404).json({ error: "Summary not found" });
       }

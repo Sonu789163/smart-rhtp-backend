@@ -497,7 +497,10 @@ exports.summaryController = {
         try {
             const { id } = req.params;
             const query = {
-                id,
+                $or: [
+                    { id: id },
+                    { id: Number(id) }
+                ],
                 domain: req.userDomain, // Ensure user can only update summaries from their domain
             };
             // All workspace members can update summaries in their workspace
@@ -523,24 +526,35 @@ exports.summaryController = {
         var _a, _b, _c;
         try {
             const { id } = req.params;
+            const currentWorkspace = req.currentWorkspace || req.userDomain;
             const query = {
-                id,
-                domain: req.userDomain, // Ensure user can only delete summaries from their domain
+                $or: [
+                    { id: id },
+                    { id: Number(id) }
+                ],
             };
+            // Let workspace members delete summaries in the workspace
+            if (currentWorkspace) {
+                query.workspaceId = currentWorkspace;
+            }
+            else {
+                query.domain = req.userDomain;
+            }
             // All workspace members can delete summaries in their workspace
             // No user-based filtering needed - workspace isolation is sufficient
             const summary = await Summary_1.Summary.findOneAndDelete(query).lean();
-            if (summary) {
-                await (0, events_1.publishEvent)({
-                    actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
-                    domain: req.userDomain,
-                    action: "summary.deleted",
-                    resourceType: "summary",
-                    resourceId: summary.id,
-                    title: `Summary deleted: ${summary.title || summary.id}`,
-                    notifyWorkspace: true,
-                });
+            if (!summary) {
+                return res.status(404).json({ message: "Summary not found or access denied" });
             }
+            await (0, events_1.publishEvent)({
+                actorUserId: (_c = (_b = (_a = req.user) === null || _a === void 0 ? void 0 : _a._id) === null || _b === void 0 ? void 0 : _b.toString) === null || _c === void 0 ? void 0 : _c.call(_b),
+                domain: req.userDomain,
+                action: "summary.deleted",
+                resourceType: "summary",
+                resourceId: summary.id,
+                title: `Summary deleted: ${summary.title || summary.id}`,
+                notifyWorkspace: true,
+            });
             res.json({ message: "Summary deleted successfully" });
         }
         catch (error) {
@@ -584,7 +598,12 @@ exports.summaryController = {
         var _a, _b, _c, _d, _e, _f, _g;
         try {
             const { id } = req.params;
-            const summary = await Summary_1.Summary.findOne({ id });
+            const summary = await Summary_1.Summary.findOne({
+                $or: [
+                    { id: id },
+                    { id: Number(id) }
+                ]
+            });
             if (!summary || !summary.content) {
                 return res.status(404).json({ error: "Summary not found" });
             }

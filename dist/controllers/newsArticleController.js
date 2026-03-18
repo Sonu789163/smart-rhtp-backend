@@ -259,4 +259,29 @@ exports.newsArticleController = {
             });
         }
     },
+    // DELETE article by ID
+    async deleteArticle(req, res) {
+        try {
+            const { id } = req.params;
+            const workspaceId = req.headers['x-workspace'];
+            if (!workspaceId) {
+                return res.status(400).json({ message: 'Workspace ID required' });
+            }
+            const result = await NewsArticle_1.default.findOneAndDelete({
+                _id: id,
+                workspaceId
+            });
+            if (!result) {
+                return res.status(404).json({ message: 'Article not found or access denied' });
+            }
+            res.json({ message: 'Article deleted successfully' });
+        }
+        catch (error) {
+            console.error('Error deleting article:', error);
+            res.status(500).json({
+                message: 'Error deleting article',
+                error: error.message,
+            });
+        }
+    }
 };

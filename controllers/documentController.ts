@@ -1188,7 +1188,7 @@ export const documentController = {
             directoryId: finalDirectoryId
           }
         }, {
-          timeout: 60000 // 1 minute timeout for the initial call
+          timeout: 300000 // 5 minute timeout to accommodate large PDF processing
         });
 
         if (pythonResponse.data && pythonResponse.data.status === "success") {
@@ -1374,6 +1374,7 @@ export const documentController = {
   },
 
   async uploadStatusUpdate(req: AuthRequest, res: Response) {
+    console.log("🚀 Received upload-status update hit!");
     try {
       // Accept both jobId and documentId from n8n (n8n might send either)
       const { jobId, documentId, status, error } = req.body;
@@ -1671,7 +1672,7 @@ export const documentController = {
             adverse_finding: domainConfig?.adverse_finding ?? true
           }
         }, {
-          timeout: 60000
+          timeout: 300000 // 5 minute timeout for PDF ingestion
         });
 
         if (pythonResponse.data && pythonResponse.data.status === "success") {

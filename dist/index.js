@@ -26,11 +26,13 @@ const workspaceRequest_routes_1 = __importDefault(require("./routes/workspaceReq
 const newsCrawl_routes_1 = __importDefault(require("./routes/newsCrawl.routes"));
 const newsArticle_routes_1 = __importDefault(require("./routes/newsArticle.routes"));
 const domain_routes_1 = __importDefault(require("./routes/domain.routes"));
+const health_routes_1 = __importDefault(require("./routes/health.routes"));
 const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
 const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const emailService_1 = require("./services/emailService");
+const healthService_1 = require("./services/healthService");
 dotenv_1.default.config();
 exports.app = (0, express_1.default)();
 // Trust proxy for Render deployment
@@ -165,6 +167,12 @@ if (process.env.NODE_ENV !== 'test') {
         (0, emailService_1.testSmtpConnection)().catch((err) => {
             console.error("SMTP test error:", err);
         });
+        // Initial System Health Check (non-blocking)
+        healthService_1.HealthService.generateFullReport().then(report => {
+            console.log(`System Startup Health: ${report.overall_status.toUpperCase()}`);
+        }).catch(err => {
+            console.error("Startup Health Check Error:", err);
+        });
     })
         .catch((error) => {
         console.error("MongoDB connection error:", error);
@@ -198,6 +206,7 @@ exports.app.use("/api/workspace-requests", workspaceRequest_routes_1.default);
 exports.app.use("/api/news-crawl", newsCrawl_routes_1.default);
 exports.app.use("/api/news-articles", newsArticle_routes_1.default);
 exports.app.use("/api/domain", domain_routes_1.default);
+exports.app.use("/api/health", health_routes_1.default);
 // Health check endpoint
 exports.app.get("/health", (req, res) => {
     res.status(200).json({ status: "ok" });

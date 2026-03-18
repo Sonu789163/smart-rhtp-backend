@@ -31,18 +31,19 @@ exports.domainController = {
                 valuation_matching: domain.valuation_matching,
                 adverse_finding: domain.adverse_finding,
                 target_investors: domain.target_investors || [],
-                // SOP data
-                has_sop: !!(domain.sop_text),
+                // SOP & Prompts data
+                sop_text: domain.sop_text || "",
+                agent3_prompt: domain.agent3_prompt || "",
+                agent3_subqueries: domain.agent3_subqueries || [],
+                agent4_subqueries: domain.agent4_subqueries || [],
+                agent4_prompt: domain.agent4_prompt || "",
                 // Onboarding status
                 onboarding_status: domain.onboarding_status || "pending",
                 last_onboarded: domain.last_onboarded,
-                // Custom configs summary (don't send full prompts to frontend)
-                has_custom_subqueries: !!(domain.custom_subqueries && domain.custom_subqueries.length > 0),
-                custom_subqueries_count: (domain.custom_subqueries || []).length,
-                has_agent3_prompt: !!(domain.agent3_prompt),
-                has_agent4_prompt: !!(domain.agent4_prompt),
+                // Custom configs summary
+                has_custom_subqueries: !!(domain.agent4_subqueries && domain.agent4_subqueries.length > 0),
+                custom_subqueries_count: (domain.agent4_subqueries || []).length,
                 // Legacy
-                validator_checklist: domain.validator_checklist || [],
             });
         }
         catch (error) {
@@ -76,24 +77,66 @@ exports.domainController = {
                 domain.valuation_matching = updates.valuation_matching;
             if (updates.adverse_finding !== undefined)
                 domain.adverse_finding = updates.adverse_finding;
+            let triggerAIUpdate = false;
+            // Update list fields if provided
+            if (updates.sop_text !== undefined && updates.sop_text !== domain.sop_text) {
+                domain.sop_text = updates.sop_text;
+                triggerAIUpdate = true;
+            }
+            if (updates.agent3_prompt !== undefined)
+                domain.agent3_prompt = updates.agent3_prompt;
+            if (updates.agent4_prompt !== undefined)
+                domain.agent4_prompt = updates.agent4_prompt;
+            if (Array.isArray(updates.agent4_subqueries))
+                domain.agent4_subqueries = updates.agent4_subqueries;
+            if (Array.isArray(updates.agent3_subqueries))
+                domain.agent3_subqueries = updates.agent3_subqueries;
             // Update lists if provided (replace entire list)
             if (Array.isArray(updates.target_investors)) {
                 domain.target_investors = updates.target_investors;
             }
-            if (Array.isArray(updates.validator_checklist)) {
-                domain.validator_checklist = updates.validator_checklist;
+            // If SOP updated, trigger the Onboarding Agent again
+            if (triggerAIUpdate && domain.sop_text.trim()) {
+                console.log(`AI Update triggered due to SOP change for ${domainId}`);
+                domain.onboarding_status = "processing";
+                // Fire and forget (or handle response if you want to be more strict)
+                const forwardData = new form_data_1.default();
+                forwardData.append("domainId", domainId);
+                forwardData.append("sopText", domain.sop_text);
+                forwardData.append("config", JSON.stringify({
+                    toggles: {
+                        investor_match_only: domain.investor_match_only,
+                        valuation_matching: domain.valuation_matching,
+                        adverse_finding: domain.adverse_finding,
+                    },
+                    targetInvestors: domain.target_investors || [],
+                }));
+                axios_1.default.post(`${PYTHON_API_URL}/onboarding/re-onboard`, forwardData, {
+                    headers: forwardData.getHeaders(),
+                    timeout: 30000,
+                }).then(response => {
+                    console.log(`✅ Success: AI Re-onboarding started for ${domainId}`);
+                }).catch(err => {
+                    var _a;
+                    console.error(`❌ Error triggering AI Re-onboarding for ${domainId}:`, ((_a = err.response) === null || _a === void 0 ? void 0 : _a.data) || err.message);
+                });
             }
             domain.updatedAt = new Date();
             await domain.save();
-            console.log(`✅ Domain config updated for ${domainId}`);
+            console.log(`✅ Domain config updated for ${domainId}${triggerAIUpdate ? " (AI background task started)" : ""}`);
             res.json({
-                message: "Configuration updated successfully",
+                message: triggerAIUpdate ? "Configuration updated and AI analysis started" : "Configuration updated successfully",
                 config: {
                     investor_match_only: domain.investor_match_only,
                     valuation_matching: domain.valuation_matching,
                     adverse_finding: domain.adverse_finding,
                     target_investors: domain.target_investors,
-                    validator_checklist: domain.validator_checklist
+                    sop_text: domain.sop_text,
+                    agent3_prompt: domain.agent3_prompt,
+                    agent4_subqueries: domain.agent4_subqueries,
+                    agent3_subqueries: domain.agent3_subqueries,
+                    agent4_prompt: domain.agent4_prompt,
+                    onboarding_status: domain.onboarding_status
                 }
             });
         }
@@ -124,8 +167,8 @@ exports.domainController = {
                 onboarding_status: domain.onboarding_status || "pending",
                 last_onboarded: domain.last_onboarded,
                 has_sop: !!(domain.sop_text),
-                has_custom_subqueries: !!(domain.custom_subqueries && domain.custom_subqueries.length > 0),
-                custom_subqueries_count: (domain.custom_subqueries || []).length,
+                has_custom_subqueries: !!(domain.agent4_subqueries && domain.agent4_subqueries.length > 0),
+                custom_subqueries_count: (domain.agent4_subqueries || []).length,
                 has_agent3_prompt: !!(domain.agent3_prompt),
                 has_agent4_prompt: !!(domain.agent4_prompt),
                 subquery_analysis: domain.subquery_analysis || {},
@@ -201,15 +244,17 @@ exports.domainController = {
             });
         }
         catch (error) {
-            console.error("Error in onboarding setup proxy:", ((_a = error === null || error === void 0 ? void 0 : error.response) === null || _a === void 0 ? void 0 : _a.data) || error.message);
+            const pythonError = (_a = error === null || error === void 0 ? void 0 : error.response) === null || _a === void 0 ? void 0 : _a.data;
+            const statusCode = (_b = error === null || error === void 0 ? void 0 : error.response) === null || _b === void 0 ? void 0 : _b.status;
+            console.error(`Error in onboarding setup proxy (Python returned ${statusCode}):`, JSON.stringify(pythonError, null, 2) || error.message);
             // Update status to failed
             const domainId = req.userDomain;
             if (domainId) {
                 await Domain_1.Domain.updateOne({ domainId }, { $set: { onboarding_status: "failed", updatedAt: new Date() } }).catch(() => { });
             }
-            res.status(500).json({
+            res.status(statusCode || 500).json({
                 error: "Failed to start onboarding",
-                details: ((_b = error === null || error === void 0 ? void 0 : error.response) === null || _b === void 0 ? void 0 : _b.data) || error.message
+                details: pythonError || error.message
             });
         }
     },
@@ -276,4 +321,29 @@ exports.domainController = {
             });
         }
     },
+    // Trigger instant news monitor crawl
+    async triggerInstantNewsCrawl(req, res) {
+        var _a, _b;
+        try {
+            const domainId = req.userDomain;
+            if (!domainId) {
+                return res.status(400).json({ error: "Domain context not found" });
+            }
+            console.log(`🚀 Manual trigger: News Monitor crawl for domain: ${domainId}`);
+            const response = await axios_1.default.post(`${PYTHON_API_URL}/news-monitor/trigger`, {
+                domainId: domainId
+            });
+            res.json({
+                message: "Instant news crawl triggered successfully",
+                pythonResponse: response.data
+            });
+        }
+        catch (error) {
+            console.error("Error triggering manual news crawl:", ((_a = error.response) === null || _a === void 0 ? void 0 : _a.data) || error.message);
+            res.status(500).json({
+                error: "Failed to trigger news crawl",
+                details: ((_b = error.response) === null || _b === void 0 ? void 0 : _b.data) || error.message
+            });
+        }
+    }
 };

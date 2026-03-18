@@ -19,4 +19,6 @@ router.get('/stats', newsArticleController_1.newsArticleController.getArticleSta
 router.get('/:id', newsArticleController_1.newsArticleController.getArticleById);
 // GET articles by company
 router.get('/company/:company', newsArticleController_1.newsArticleController.getArticlesByCompany);
+// DELETE article by ID
+router.delete('/:id', newsArticleController_1.newsArticleController.deleteArticle);
 exports.default = router;
